@@ -9,7 +9,13 @@ import { NextResponse } from "next/server";
  * 수단이 없었고, 쓰는 사람이 여럿이면 그건 수단이 아니다.
  *
  * 이 라우트가 그 수단이다. 번들에 박힌 빌드 커밋(`APP_BUILD_SHA`)과 여기 값이 다르면
- * 그 탭은 낡은 것이므로 **스스로 새로고침한다**(`components/shell/sidebar.tsx`).
+ * 그 탭은 낡은 것이므로 **스스로 새로고침한다**(`components/layout/sidebar.tsx` 의 `checkVersion`).
+ *
+ * ⚠️ **부르는 곳이 사라지면 이 라우트는 조용히 무의미해진다.** 실제로 그런 적이 있다 —
+ *    셸을 `components/shell/` → `components/layout/` 으로 갈아끼울 때 `checkVersion` 이
+ *    딸려 오지 못해서, 2026-09-14 까지 이걸 **부르는 코드가 하나도 없었다.** 라우트는
+ *    멀쩡히 200 을 주고 있었으므로 아무 경보도 울리지 않았다.
+ *    셸을 손댈 때 이 짝이 살아 있는지 같이 볼 것.
  *
  * `force-dynamic` 이 필수다 — 캐시되면 영원히 옛 커밋을 돌려주고 아무도 갱신되지 않는다.
  */

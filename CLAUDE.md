@@ -66,7 +66,7 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~12,300줄, 라우트 282개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~13,500줄, 라우트 283개**) + 별도 워커 프로세스 구조.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
@@ -165,9 +165,11 @@ rights · dialogue · chyron · summary · emb_dialogue vector(768) · emb_summa
 `search-embed.ts`(RETRIEVAL_QUERY). Vertex 실패 시 **키워드축(pg_trgm) 단독 폴백** — 한국어는
 키워드 매칭이 강해서 벡터 없이도 검색이 성립한다.
 
-**주요 라우트** — 총 282개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
+**주요 라우트** — 총 283개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
 ```
 GET  /health · /api/state · /api/search        # 검색 = 하이브리드(벡터+키워드)
+GET  /api/state/progress                 # 진행률만(회차 pipeline + 잡). 웹이 분석 중 8초 폴링하는
+                                         #   자리 — 전체 상태는 유휴에만·ETag 로 대부분 304
 POST /api/media/upload-init → finalize   # 브라우저→GCS 직접 resumable 업로드 (대용량 표준 경로)
 POST /api/media/upload · /api/media/from-youtube
 GET  /api/media/:id/stream · /thumb · /frame · /analysis · /transcript
@@ -278,8 +280,11 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 - **데이터 레이어:** `store.tsx`는 빈 상태(EMPTY_STATE)로 시작해 기동 시 `fetchState()`가 성공하면
   서버 상태로 교체한다. 실패하면 **빈 상태를 유지한다 (목 폴백은 제거됨)** — 빈 화면이면
   "서버 미연결"인지 "데이터 없음"인지 `/api/state` 응답으로 구분할 것.
-- 실 서버 연동은 `lib/data/api.ts`(REST)가 담당한다. `repository.ts`의 `apiRepository`는
-  폐기된 SPFN 통합 스텁(미호출)이다.
+- 실 서버 연동은 `lib/data/api.ts`(REST)가 담당한다. `repository.ts` 에 남은 건 **로컬 dev
+  더미 시드**(`seedInitialData`) 하나뿐이다 — 폐기된 SPFN 스텁(`apiRepository`)은 삭제됐다.
+- `fetchState()` 는 **`null` 을 돌려줄 수 있다**(서버가 304 = 안 바뀜). 실패가 아니므로
+  연결 상태를 내리거나 빈 상태로 되돌리지 말 것 — 폴링이 45초마다 화면을 깜빡이게 된다.
+  배경과 서버 쪽 짝: [apps/web/CLAUDE.md](apps/web/CLAUDE.md) "데이터 흐름".
 - 환경변수는 `NEXT_PUBLIC_API_URL` 하나. 경로 별칭 `@/*` → `./src/*`.
 
 ---

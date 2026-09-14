@@ -186,6 +186,30 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     }
   });
 
+  it("출연자·얼굴사진은 열려 있고, 프로그램 삭제는 닫혀 있다", () => {
+    // 출연자는 프로그램 에셋이다 — 실명이 제목·자막에 들어가고 얼굴로 인물을 가린다.
+    // 2026-09-14 에 열었다(그 전엔 API 키로 붙는 콘솔에서 등록할 길이 없었다).
+    for (const [m, p] of [
+      ["GET", "/api/programs/p_1/cast"],
+      ["POST", "/api/programs/p_1/cast"],
+      ["PATCH", "/api/programs/p_1/cast/cast_1"],
+      ["DELETE", "/api/programs/p_1/cast/cast_1"],
+      ["GET", "/api/programs/p_1/cast-photos"],
+      ["POST", "/api/programs/p_1/cast-photos"],
+      ["DELETE", "/api/programs/p_1/cast-photos/%EA%B9%80%EC%A7%80%EC%9B%90"],
+      ["POST", "/api/programs/p_1/autofill"],
+    ] as [string, string][]) {
+      assert.equal(checkRoute(m, p, all).ok, true, `열려 있어야 하는 경로: ${m} ${p}`);
+    }
+
+    // ⚠️ **프로그램 자체의 삭제는 계속 막힌다.** 하위 경로를 열면서 `[^/]+` 가 넓어지면
+    //    상위 DELETE 까지 딸려 열리기 쉽다 — 회차·클립·배포 기록이 통째로 날아가는 길이다.
+    assert.equal(checkRoute("DELETE", "/api/programs/p_1", all).ok, false);
+    // 하위 경로를 연 것이 형제 경로를 열어 주지도 않는다.
+    assert.equal(checkRoute("POST", "/api/programs/p_1/thumbnail-style", all).ok, false);
+    assert.equal(checkRoute("POST", "/api/programs/p_1/autofill/chat", all).ok, false);
+  });
+
   it("스코프가 없으면 열린 라우트도 못 부른다", () => {
     const r = checkRoute("POST", "/api/media/m_1/analyze", ["search:read"]);
     assert.equal(r.ok, false);

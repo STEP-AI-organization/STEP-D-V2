@@ -99,13 +99,67 @@ export const APP_BUILD_SHA = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? ""
  * 불러 Vercel 청구서를 태웠는데, 이미 열린 탭에는 새 코드를 밀어 넣을 방법이 없었다.
  * 표식이 있으면 서버가 "낡은 탭"을 알아보고 스스로 막을 수 있다.
  */
-export async function fetchState(signal?: AbortSignal): Promise<ServerState> {
-  const res = await fetch(`${API_BASE}/state`, {
-    signal,
-    cache: "no-store",
-    headers: { "x-stepd-app": APP_BUILD_SHA || "dev" },
-  });
-  return json<ServerState>(res);
+/**
+ * 마지막으로 받은 `/api/state` 의 ETag.
+ *
+ * **HTTP 캐시를 쓰지 않고 손으로 들고 다닌다.** 이 응답은 `no-store` 라 브라우저 캐시에
+ * 남지 않고(테넌트 데이터가 중간에 남으면 안 된다), 그래서 조건부 요청도 브라우저가 대신
+ * 해 주지 않는다. 우리가 직접 `If-None-Match` 로 되돌려준다.
+ */
+let stateEtag: string | null = null;
+
+/**
+ * 워크스페이스 전체 상태. **안 바뀌었으면 `null`** 을 돌려준다(서버가 304).
+ *
+ * 호출부(`store.tsx`)는 탭이 열려 있는 내내 이걸 폴링한다 — 유휴 45초, 분석 중 8초.
+ * 그 대부분의 틱에서는 아무것도 안 바뀌어 있는데, 그때마다 워크스페이스 전체를 받아오면
+ * 그 바이트가 전부 Vercel Fast Origin Transfer 로 청구된다(2026-08-31 사고).
+ * `null` 은 "못 받았다" 가 아니라 **"받을 게 없다"** 이므로 호출부는 현재 상태를 유지하면 된다.
+ */
+export async function fetchState(signal?: AbortSignal): Promise<ServerState | null> {
+  const headers: Record<string, string> = { "x-stepd-app": APP_BUILD_SHA || "dev" };
+  if (stateEtag) headers["if-none-match"] = stateEtag;
+
+  const res = await fetch(`${API_BASE}/state`, { signal, cache: "no-store", headers });
+  if (res.status === 304) return null;
+
+  // 200 이 아닌 건 여기서 판단하지 않는다 — json() 이 서버가 준 사유를 살려서 던진다.
+  // ETag 는 **본문을 실제로 받은 경우에만** 갱신한다. 실패 응답의 것을 물고 있으면
+  // 다음 요청이 엉뚱한 조건부가 된다.
+  const state = await json<ServerState>(res);
+  stateEtag = res.headers.get("etag");
+  return state;
+}
+
+/** `/api/state/progress` 응답 — 회차 진행률과 잡 상태만. */
+export interface StateProgress {
+  episodes: { id: string; pipeline: unknown }[];
+  jobs: unknown[];
+}
+
+/** `fetchStateProgress` 전용 ETag. `stateEtag` 와 **섞으면 안 된다** — 다른 문서다. */
+let progressEtag: string | null = null;
+
+/**
+ * 진행률만. **안 바뀌었으면 `null`**(서버가 304).
+ *
+ * 파이프라인이 도는 동안 스토어가 8초마다 부르는 자리다. 예전엔 이 자리에서
+ * `/api/state` 전체를 받았는데, 하필 그 구간은 **진행률이 매 틱 바뀌어 ETag 가 매번
+ * 어긋나므로** 조건부 요청이 하나도 안 들었다. 응답이 작아야 하는 곳을 작게 만든 것이다.
+ *
+ * 이걸로는 "진행률"만 갱신된다 — 분석이 끝나서 **추천·클립·미디어가 새로 생긴 것**은
+ * 여기 안 담긴다. 그건 호출부가 단계 전환을 보고 전체를 한 번 더 받아 채운다(`store.tsx`).
+ */
+export async function fetchStateProgress(signal?: AbortSignal): Promise<StateProgress | null> {
+  const headers: Record<string, string> = { "x-stepd-app": APP_BUILD_SHA || "dev" };
+  if (progressEtag) headers["if-none-match"] = progressEtag;
+
+  const res = await fetch(`${API_BASE}/state/progress`, { signal, cache: "no-store", headers });
+  if (res.status === 304) return null;
+
+  const progress = await json<StateProgress>(res);
+  progressEtag = res.headers.get("etag");
+  return progress;
 }
 
 export interface AnalysisScene {

@@ -2434,6 +2434,40 @@ export async function getState() {
 }
 
 /**
+ * `/api/state/progress` — **진행률만.** 파이프라인이 도는 동안 폴링이 받아갈 최소 집합이다.
+ *
+ * ## 왜 떼어냈나
+ * 웹 스토어는 분석이 도는 동안 **8초마다** 폴링한다(진행률이 멈춰 보이면 안 되므로).
+ * 그런데 그때 받아오던 게 `/api/state` 전체였다. ETag 를 붙여도 이 구간은 못 줄인다 —
+ * **진행률이 실제로 매 틱 바뀌므로 매번 ETag 가 어긋나 전체가 흐른다.** 즉 조건부 요청이
+ * 가장 필요한 구간에서 가장 안 듣는다. 그 구간을 통째로 이쪽으로 옮긴다.
+ *
+ * 회차 하나가 실어 보내는 건 `EpisodePipeline`(stage·stageStatus·progress·note·blockedReason)
+ * 뿐이라 회차당 100바이트 남짓이다. 전체 회차 엔티티(자막·분석 참조까지 달린)와 자릿수가 다르다.
+ *
+ * ## `data->'pipeline'` 로 **읽는 순간에** 걸러낸다
+ * JS 에서 골라내면 응답만 작아지고 Postgres → Node 구간은 그대로 전부 실어 나른다.
+ * `listProgramsForState` 가 base64 이미지에 쓰는 것과 같은 수법이다(바로 위 참조).
+ */
+export async function getStateProgress() {
+  const [episodes, jobs] = await Promise.all([
+    pool.query(
+      `SELECT data ->> 'id' AS id, data -> 'pipeline' AS pipeline
+         FROM entities WHERE kind = 'episode' ORDER BY ord ASC`,
+    ),
+    // 잡은 전체 상태와 **같은 상한**을 쓴다 — 두 응답의 jobs 가 다른 길이면 폴링이 병합할 때
+    // 목록이 늘었다 줄었다 한다.
+    listEntities("job", STATE_JOB_LIMIT),
+  ]);
+  return {
+    episodes: episodes.rows
+      .filter((r) => r.id)
+      .map((r) => ({ id: r.id as string, pipeline: r.pipeline as unknown })),
+    jobs,
+  };
+}
+
+/**
  * `/api/state` 용 프로그램 목록 — **base64 이미지를 DB 에서부터 안 읽는다.**
  *
  * JS 에서만 걸러내면 **응답**은 줄어도 Postgres → Node 구간은 그대로 19 MB 를 실어 나르고

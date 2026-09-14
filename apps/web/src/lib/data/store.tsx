@@ -39,6 +39,8 @@ import {
   API_BASE,
   ApiError,
   fetchState,
+  fetchStateProgress,
+  type StateProgress,
   uploadVideo as apiUploadVideo,
   uploadFinishedClip as apiUploadFinishedClip,
   type FinishedClipOptions,
@@ -311,7 +313,7 @@ export function AppDataProvider({
   const reframeEpochRef = useRef(new Map<string, number>());
   const reframeReadRef = useRef(new Map<string, number>());
 
-  const applyServerState = useCallback((s: Awaited<ReturnType<typeof fetchState>>) => {
+  const applyServerState = useCallback((s: NonNullable<Awaited<ReturnType<typeof fetchState>>>) => {
     // 옛/불완전 clip에 distributions·기타 배열 필드가 없으면 빈 배열로 정규화 —
     // 8+ 컴포넌트가 clip.distributions.map/find/filter를 직접 호출해서 undefined면 크래시.
     // seed·mock·옛 스키마 저장분에서 흔한 문제.
@@ -336,7 +338,9 @@ export function AppDataProvider({
     const epoch = mutationEpochRef.current;
     try {
       const s = await fetchState();
-      if (epoch === mutationEpochRef.current) applyServerState(s);
+      // `null` = 서버가 304 로 "안 바뀌었다" 고 답한 것이다. 실패가 아니므로 연결 상태를
+      // 건드리지 않고, 적용할 것도 없으니 지금 상태를 그대로 둔다.
+      if (s && epoch === mutationEpochRef.current) applyServerState(s);
     } catch {
       connectedRef.current = false;
       setServerConnected(false);
@@ -349,7 +353,9 @@ export function AppDataProvider({
     (async () => {
       try {
         const s = await fetchState();
-        if (alive) applyServerState(s);
+        // 첫 기동이라 들고 있는 ETag 가 없다 — 304 는 나올 수 없지만, 타입상 null 을 받으니
+        // 그대로 통과시킨다(그 경우 빈 상태 유지 = 기존 서버 미연결 동작과 같다).
+        if (alive && s) applyServerState(s);
       } catch {
         /* server unreachable — leave the store empty (no mock fallback) */
       } finally {
@@ -413,22 +419,61 @@ export function AppDataProvider({
   const fastSinceRef = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  /**
+   * 진행률 슬라이스를 현재 상태에 덮는다. **단계가 바뀌었으면 `true`** 를 돌려준다.
+   *
+   * `/api/state/progress` 는 회차의 `pipeline` 과 잡 상태만 들고 온다 — 분석이 끝나서
+   * **새로 생긴 추천·클립·미디어는 여기 안 담긴다.** 그래서 단계 전환을 감지하면 호출부가
+   * 전체 상태를 한 번 더 받아 그 빈자리를 채운다. 진행률 숫자(`progress`)나 문구(`note`)만
+   * 움직인 건 전환이 아니다 — 그것 때문에 전체를 받으면 쪼갠 의미가 없다.
+   *
+   * ⚠️ 전환 판정을 `setState` 업데이터 **안에서** 하지 않는다. 업데이터는 순수해야 하고
+   *    (StrictMode 는 두 번 부른다), 바깥 변수를 건드리면 두 번 세는 값이 된다.
+   *    직전 상태는 `stateRef` 로 읽는다.
+   */
+  const applyProgress = useCallback((p: StateProgress): boolean => {
+    const prev = stateRef.current;
+    const byId = new Map(p.episodes.map((e) => [e.id, e.pipeline as Episode["pipeline"]]));
+    const transitioned =
+      // 회차가 생기거나 사라진 것도 전환이다 — 목록 자체는 전체 상태에만 있다.
+      byId.size !== prev.episodes.length ||
+      prev.episodes.some((e) => {
+        const next = byId.get(e.id);
+        return !next || next.stage !== e.pipeline?.stage || next.stageStatus !== e.pipeline?.stageStatus;
+      });
+
+    setState((s) => ({
+      ...s,
+      episodes: s.episodes.map((e) => {
+        const next = byId.get(e.id);
+        return next ? { ...e, pipeline: next } : e;
+      }),
+      jobs: p.jobs as JobEvent[],
+    }));
+    return transitioned;
+  }, []);
+
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
-    const nextDelay = () => {
-      if (!connectedRef.current) return 15_000;
+    // `분석 대기`(idle + analyze)도 활성으로 친다 — 워커가 잡을 집는 순간을 보려면
+    // 그 전부터 폴링이 돌고 있어야 한다. 업로드 직후 회차가 여기 들어오므로
+    // 이걸 빼면 "분석 대기"에서 화면이 멈춘 것처럼 보인다.
+    const isActive = () => {
       const s = stateRef.current;
-      // `분석 대기`(idle + analyze)도 활성으로 친다 — 워커가 잡을 집는 순간을 보려면
-      // 그 전부터 폴링이 돌고 있어야 한다. 업로드 직후 회차가 여기 들어오므로
-      // 이걸 빼면 "분석 대기"에서 화면이 멈춘 것처럼 보인다.
-      const active =
+      return (
         s.jobs.some((j) => j.status === "running") ||
         s.episodes.some(
           (e) =>
             e.pipeline?.stageStatus === "progress" ||
             (e.pipeline?.stageStatus === "idle" && e.pipeline?.stage === "analyze"),
-        );
+        )
+      );
+    };
+    const nextDelay = () => {
+      if (!connectedRef.current) return 15_000;
+      const active = isActive();
       // ⚠️ **빠른 모드에는 상한이 필요하다.** `running` 잡이나 `progress` 회차가 어떤 이유로든
       // 안 끝나면(워커가 조용히 죽어 잡이 running 으로 남는 건 이 리포의 기록된 실패 모드다)
       // 모든 탭이 **24시간 내내 8초 폴링**을 돈다 — 그 자체가 청구서가 된다(2026-08-31 사고의
@@ -438,16 +483,46 @@ export function AppDataProvider({
       if (!fastSinceRef.current) fastSinceRef.current = Date.now();
       return Date.now() - fastSinceRef.current < FAST_POLL_MAX_MS ? 8_000 : 45_000;
     };
-    // ⚠️ **숨은 탭에서는 받아오지 않는다.** 이 루프가 부르는 refresh() 는 `/api/state` 전체다.
-    // 아무도 안 보는 탭이 8초마다 그걸 받아오면 그 바이트가 전부 Vercel Fast Origin Transfer 로
-    // 청구된다 — 2026-08-31 에 같은 응답을 8초마다 부르던 표시등이 3시간에 34.5 GB 를 썼다.
-    // 루프는 계속 돌되(돌아왔을 때 곧바로 이어가려고) 요청만 건너뛴다.
+    // ⚠️ **숨은 탭에서는 받아오지 않는다.** 아무도 안 보는 탭이 8초마다 받아오면 그 바이트가
+    // 전부 Vercel Fast Origin Transfer 로 청구된다 — 2026-08-31 에 같은 응답을 8초마다 부르던
+    // 표시등이 3시간에 34.5 GB 를 썼다. 루프는 계속 돌되(돌아왔을 때 곧바로 이어가려고)
+    // 요청만 건너뛴다.
+    //
+    // ## 두 갈래로 받는다 (2026-09-14)
+    // 예전엔 어느 틱이든 `/api/state` **전체**였다. 그런데 8초 틱이 도는 구간은 정확히
+    // 진행률이 매초 바뀌는 구간이라, ETag 를 붙여도 매번 어긋나 전체가 그대로 흘렀다.
+    //
+    //   활성(분석 중) → `/api/state/progress` (작다). 단계가 바뀐 틱에만 전체를 덧받는다
+    //   유휴          → `/api/state` 전체. 안 바뀌었으면 304 라 사실상 공짜다
+    //
+    // 진행률만 받으면 **남이 바꾼 것**(동료가 채택·삭제)이 안 보이므로, 활성 중에도
+    // 최소 `FULL_REFRESH_MAX_MS` 마다 한 번은 전체를 받는다.
     let inFlight = false;
+    let lastFullAt = Date.now();          // 마운트 시 이미 전체를 한 번 받았다(위 효과)
+    const FULL_REFRESH_MAX_MS = 45_000;
+
     const tick = async () => {
       if (!alive || inFlight) return;
       inFlight = true;
+      const full = async () => {
+        await refresh();
+        lastFullAt = Date.now();
+      };
       try {
-        if (!document.hidden) await refresh();
+        if (!document.hidden) {
+          if (!isActive() || Date.now() - lastFullAt >= FULL_REFRESH_MAX_MS) {
+            await full();
+          } else {
+            try {
+              const p = await fetchStateProgress();
+              // null = 304(진행률도 그대로). 전환도 없으니 이 틱은 아무것도 안 한다.
+              if (p && applyProgress(p)) await full();
+            } catch {
+              // 진행률 경로가 실패하면 전체 경로로 간다 — 연결 끊김 판정은 refresh() 안에만 있다.
+              await full();
+            }
+          }
+        }
       } finally {
         inFlight = false;
       }
@@ -467,7 +542,8 @@ export function AppDataProvider({
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+    // 둘 다 `useCallback([])` 이라 안정적이다 — 이 루프가 다시 구독되지 않는다.
+  }, [refresh, applyProgress]);
 
   const adoptRecommendation = useCallback(async (
     id: string,

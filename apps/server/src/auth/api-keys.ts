@@ -190,6 +190,23 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/programs$/, scope: "media:write" },
   { method: "PATCH", path: /^\/api\/programs\/[^/]+$/, scope: "media:write" },
 
+  // 출연자 — **프로그램 에셋의 일부다.** 실명이 제목·자막·해시태그에 들어가고, 얼굴 사진은
+  // 장면 속 인물을 가려 그 실명을 정확히 쓰게 한다. 라우트는 2026-08 부터 있었지만 여기
+  // 없어서 **API 키로 붙는 고객사 콘솔에서는 등록할 길이 아예 없었다** — 우리 웹에서
+  // 대신 넣어 주는 수밖에 없던 것을 연다(aena 자동배포 화면 개편 2026-09-14).
+  { method: "GET", path: /^\/api\/programs\/[^/]+\/cast$/, scope: "media:read" },
+  { method: "POST", path: /^\/api\/programs\/[^/]+\/cast$/, scope: "media:write" },
+  { method: "PATCH", path: /^\/api\/programs\/[^/]+\/cast\/[^/]+$/, scope: "media:write" },
+  { method: "DELETE", path: /^\/api\/programs\/[^/]+\/cast\/[^/]+$/, scope: "media:write" },
+  // 얼굴 사진 — multipart(name + file). 목록/삭제까지 같이 열어야 화면에서 되돌릴 수 있다.
+  { method: "GET", path: /^\/api\/programs\/[^/]+\/cast-photos$/, scope: "media:read" },
+  { method: "POST", path: /^\/api\/programs\/[^/]+\/cast-photos$/, scope: "media:write" },
+  { method: "DELETE", path: /^\/api\/programs\/[^/]+\/cast-photos\/[^/]+$/, scope: "media:write" },
+  // 프로그램 정보 자동 채우기 — 제목만 주면 장르·출연진 후보를 찾아 준다.
+  // ⚠️ **무거운 호출이다**: python 자식 프로세스 + grounding 2회, 대개 20~40초(타임아웃 90초).
+  //    화면에서 사람이 버튼을 눌렀을 때만 쓰는 전제로 연다 — 배치로 돌리면 서버가 앉는다.
+  { method: "POST", path: /^\/api\/programs\/[^/]+\/autofill$/, scope: "media:write" },
+
   // 자동배포 규칙 — 발행 계획 화면의 실체
   { method: "GET", path: /^\/api\/automation$/, scope: "factory:read" },
   { method: "POST", path: /^\/api\/automation\/rules$/, scope: "factory:write" },

@@ -5,7 +5,7 @@
   "description": "STEP-D — UX-first studio (monorepo: web + server). Original STEPD is a separate read-only repo.",
   "scripts": {
     "setup:check": "node scripts/setup-check.mjs",
-    "check": "pnpm -r typecheck && pnpm --filter stepaistudio test && pnpm --filter @stepd/server test && node scripts/test-core.mjs",
+    "check": "pnpm -r typecheck && pnpm --filter stepaistudio test && pnpm --filter @stepd/server test && pnpm --filter @stepd/web --fail-if-no-match test && node scripts/test-core.mjs",
     "ci:local": "node scripts/ci-local.mjs",
     "dev": "pnpm -r --parallel dev",
     "dev:web": "pnpm --filter @stepd/web dev",

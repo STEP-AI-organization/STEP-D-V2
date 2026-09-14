@@ -72,6 +72,7 @@ import crypto from "node:crypto";
 import {
   initDb,
   getState,
+  getStateProgress,
   getEntity,
   putEntity,
   patchClipEditorAtomic,
@@ -2336,11 +2337,74 @@ app.get("/api/superadmin/usage/trend", async (c) => {
 // (aena 자동배포)이 뜨는 데 3.5~6.4초가 걸렸다 — 30초 폴링이라 계속 반복된다.
 // editorState 는 **우리 편집기 전용 내부 상태**라 고객사 API 로는 쓸 일이 없다(파트너
 // 응답 계약: 목록·상태·배포 기록). 웹(세션) 호출은 편집기가 그걸로 화면을 그리므로 그대로 둔다.
+/**
+ * `/api/state` 응답 — **안 바뀌었으면 본문을 안 보낸다(ETag → 304).**
+ *
+ * ## 왜
+ * 웹의 스토어는 이 응답을 **탭이 열려 있는 내내 폴링한다** — 유휴 45초, 분석 중 8초
+ * (`apps/web/src/lib/data/store.tsx` tick 루프). 그런데 이 라우트는 워크스페이스 전체
+ * (프로그램·회차·추천·클립·미디어)를 상한 없이 싣는다. 즉 **아무 일도 안 일어나는 동안에도**
+ * 45초마다 전체가 흐른다.
+ *
+ * 그 바이트가 그냥 바이트가 아니다. 프로덕션 웹은 `/api/proxy` 를 거치므로 오리진에서
+ * 나가는 모든 바이트가 Vercel Fast Origin Transfer 로 **과금된다**(2026-08-31 사고의 정체).
+ *
+ * ## gzip 이 이미 걸려 있는데 왜 부족한가
+ * `app.use("/api/*", compress())` 가 붙어 있지만 그건 **Cloud Run → Vercel 구간**만 줄인다.
+ * 프록시(`apps/web/src/app/api/proxy/[[...path]]/route.ts`)의 undici fetch 가 응답을 받는
+ * 즉시 **압축을 풀고**, 거기서 엣지로 나가는 건 원본 크기다. 과금되는 구간이 정확히 거기다.
+ * 304 는 본문이 아예 없으므로 어느 구간에서도 흐르지 않는다.
+ *
+ * ## 실패 방향
+ * ETag 가 어긋나면(행 순서가 흔들리는 등) 그냥 **200 + 전체**가 나간다 — 지금 동작 그대로다.
+ * 이 최적화가 깨졌을 때의 증상은 "느려짐" 이지 "틀린 데이터" 가 아니다.
+ *
+ * ⚠️ `no-store` 와 ETag 를 같이 보내는 게 모순처럼 보이지만 아니다. 클라이언트는 HTTP
+ *    캐시가 아니라 **JS 가 손으로** ETag 를 들고 다니며 `If-None-Match` 로 되돌려준다
+ *    (`fetchState`). 중간 캐시에 테넌트 응답이 남는 것은 계속 막아야 한다.
+ */
+function stateResponse(c: Context<AppEnv>, payload: unknown) {
+  const body = JSON.stringify(payload);
+  const etag = `W/"${crypto.createHash("sha1").update(body).digest("base64url")}"`;
+  // ⚠️ **API 키로 붙는 고객사 시스템에는 304 를 주지 않는다.**
+  //
+  // 304 는 표준이지만, 아끼려는 바이트는 **전부 브라우저 폴링 쪽**에 있다(탭이 45초마다
+  // 부른다). 외부 연동은 하루에 몇 번 부르고 말아서 아낄 게 없는데, 우리가 고칠 수 없는
+  // 남의 코드다 — "ETag 는 저장해 보내면서 304 는 처리 못 하는" 구현 하나만 있어도
+  // 그쪽 연동이 조용히 빈 응답을 받는다. **얻는 것이 0 인 쪽에 위험을 지우지 않는다.**
+  //
+  // 세션(브라우저)만 조건부 응답을 받는다. 우리 번들은 `fetchState` 가 304 를 명시적으로
+  // 다루므로 안전하다.
+  const conditional = currentContext()?.via !== "api-key";
+  if (conditional && c.req.header("if-none-match") === etag) {
+    return c.body(null, 304, { etag, "cache-control": "no-store" });
+  }
+  return c.body(body, 200, {
+    etag,
+    "cache-control": "no-store",
+    "content-type": "application/json; charset=utf-8",
+  });
+}
+
+/**
+ * 진행률만 — 파이프라인이 도는 동안 웹이 폴링하는 자리.
+ *
+ * `/api/state` 와 짝이다. 전체 상태는 "가끔"(45초 · 대부분 304), 진행률은 "자주"(8초 · 작다).
+ * 나눈 이유는 `getStateProgress` 주석에 있다 — 요약하면 **ETag 는 값이 실제로 바뀌는
+ * 구간에서는 못 도와주고, 진행률이 정확히 그런 값이라서** 그 구간만 작은 응답으로 옮겼다.
+ *
+ * 여기에도 ETag 를 붙인다. 진행률이 멈춰 있는 동안(워커가 한 단계를 오래 붙들고 있을 때)은
+ * 이것마저 304 가 된다.
+ */
+app.get("/api/state/progress", async (c) => {
+  return stateResponse(c, await getStateProgress());
+});
+
 app.get("/api/state", async (c) => {
   const state = await getState();
-  if (currentContext()?.via !== "api-key") return c.json(state);
+  if (currentContext()?.via !== "api-key") return stateResponse(c, state);
   const clips = Array.isArray((state as { clips?: unknown[] }).clips) ? (state as { clips: unknown[] }).clips : [];
-  return c.json({
+  return stateResponse(c, {
     ...state,
     clips: clips.map((clip) => {
       if (!clip || typeof clip !== "object") return clip;
@@ -12087,7 +12151,11 @@ app.post("/api/programs/:id/cast-photos", async (c) => {
 
 app.delete("/api/programs/:id/cast-photos/:name", async (c) => {
   const name = c.req.param("name");
-  if (name.includes("/") || name.includes("\\")) {
+  // 등록(POST)과 **같은 가드**를 건다 — 여기만 `.` 검사가 빠져 있었다. GCS 는 `..` 를
+  // 그냥 폴더 이름으로 보지만 로컬 폴백(useGcs() 아님)에서는 실제 경로가 되고,
+  // 이 라우트는 2026-09-14 부터 API 키로도 열린다(api-keys.ts). 넣는 쪽만 막고
+  // 지우는 쪽을 열어두면 가드가 아니다.
+  if (name.includes("/") || name.includes("\\") || name.startsWith(".")) {
     return c.json({ error: "bad_request" }, 400);
   }
   await deletePrefix(`${castPrefix(c.req.param("id"))}/${name}/`);

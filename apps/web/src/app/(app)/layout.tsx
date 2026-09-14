@@ -20,9 +20,11 @@ import { LegacyFrame } from "@/components/layout/legacy-frame";
  * 루트 레이아웃으로 올리면 `(editor)` 풀스크린 편집기에도 사이드바가 생긴다. 편집기는
  * 화면을 다 쓰는 작업 공간이라 셸이 붙으면 안 된다.
  *
- * ## CommandPalette 를 내렸다
+ * ## CommandPalette 는 없앴다 (2026-09-14 파일 삭제)
  * 디자이너 헤더가 Ctrl+K 검색 모달을 들고 온다. 둘 다 두면 한 번 눌러 **모달이 두 개** 뜬다.
- * (테스트 참조 0건 확인 · 되살리려면 header.tsx 의 키 리스너를 먼저 뺄 것.)
+ * 그래서 먼저 화면에서 내렸고(2026-09-04), 그 뒤 아무도 부르지 않는 채로 남아 있던
+ * `components/shell/command-palette.tsx` 를 지웠다. 되살릴 일이 있으면 git 이력에서 꺼내되
+ * `layout/header.tsx` 의 키 리스너를 먼저 뺄 것.
  *
  * AppDataProvider 는 루트 레이아웃에 있다 — `(editor)` 그룹도 같은 스토어를 쓴다.
  */
