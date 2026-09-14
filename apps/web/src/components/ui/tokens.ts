@@ -87,3 +87,22 @@ export const BTN_DEL = `${SMALL_BASE} bg-[var(--color-bg-card)] text-[var(--colo
 export const BTN_PRIMARY = "px-3.5 py-2 rounded-full bg-[#222222] hover:bg-black text-white"
   + " dark:bg-stone-700 dark:hover:bg-stone-600 text-xs font-bold transition-colors"
   + " cursor-pointer shadow-none border-none disabled:opacity-50 disabled:cursor-not-allowed";
+
+// ── 다이얼로그 껍데기 ──────────────────────────────────────────────────────────
+//
+// 원본의 모달은 **흐린 오버레이 + 확대되며 등장**한다. 2026-09-14 이전엔 `BillingDialog`
+// 하나만 그랬고 나머지(채택·발행·리포트·대형 미리보기)는 `bg-black/55` 에 애니메이션이
+// 없어 툭 나타났다 — 같은 제품에서 모달마다 등장이 다르면 조립한 티가 난다.
+
+/**
+ * 오버레이. 투명도는 자리마다 다를 수 있다(원본도 40~70 을 섞어 쓴다) — 더 옅게 하려면
+ * `MODAL_OVERLAY.replace("/70", "/40")` 이 아니라 뒤에 `bg-black/40` 을 덧붙여 덮을 것.
+ */
+export const MODAL_OVERLAY =
+  "fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4";
+
+/**
+ * 패널에 **덧붙이는** 등장 효과. 크기·레이아웃은 모달마다 다르므로 여기 넣지 않는다 —
+ * 이 상수는 "어떻게 나타나는가" 만 정한다.
+ */
+export const MODAL_ENTER = "animate-in fade-in zoom-in-95 duration-150";

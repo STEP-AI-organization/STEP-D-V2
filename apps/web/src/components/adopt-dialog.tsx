@@ -34,11 +34,11 @@ export function AdoptDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4"
       onClick={() => { if (!busy) onClose(); }}
     >
       <div
-        className="w-full max-w-md rounded-lg border bg-[var(--color-bg-input)] p-5 shadow-lg"
+        className="w-full max-w-md rounded-lg border bg-[var(--color-bg-input)] p-5 shadow-lg animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-sm font-semibold">채택 — {title || "쇼츠 후보"}</h3>
