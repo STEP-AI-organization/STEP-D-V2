@@ -19,6 +19,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
+import { routeSource } from "./sources.ts";
+
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = path.resolve(SRC, "..", "..", "..");
 const read = (p: string) => fs.readFileSync(path.join(REPO, p), "utf-8");
@@ -36,8 +38,12 @@ function assertClose(actual: number, documented: number, what: string, where: st
 }
 
 describe("문서가 코드와 같은 사실을 말한다", () => {
-  const indexSrc = read("apps/server/src/index.ts");
-  const routeCount = (indexSrc.match(/^app\.(get|post|put|patch|delete)\(/gm) ?? []).length;
+  // ⚠️ `index.ts` 만 읽지 않는다 — 라우트를 도메인 폴더(`*/routes.ts`)로 옮기는 중이라,
+  //    한 파일만 세면 옮겨진 만큼 **개수가 조용히 줄어든다**(sources.ts `routeFiles` 주석).
+  //    이 카운트가 전 범위를 보는 트립와이어다: 스캔이 안 따라오면 여기서 먼저 빨개진다.
+  // ⚠️ 정규식이 `^\s*` 로 들여쓰기를 허용한다. 도메인 파일에서는 라우트가
+  //    `registerXRoutes(app)` 안에 들어가 한 단계 들여쓰여 있다.
+  const routeCount = (routeSource(SRC).match(/^\s*app\.(get|post|put|patch|delete)\(/gm) ?? []).length;
   const jobTypes = new Set(
     [...(read("apps/server/src/pipeline/queue.ts").match(/export type JobType\s*=([\s\S]*?);/)?.[1] ?? "")
       .matchAll(/"([a-z]+\.[a-z]+)"/g)].map((m) => m[1]),

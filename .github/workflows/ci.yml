@@ -106,7 +106,7 @@ jobs:
       #    `chromium_headless_shell-1234 가 없다` 로 죽었다(2026-09-14 CI 실측).
       #    로컬은 이미 브라우저가 깔려 있어 안 걸린다 — CI 에서만 드러나는 종류다.
       - name: playwright 크롬 설치
-        run: pnpm --filter @stepd/web exec playwright install --with-deps chromium
+        run: pnpm --filter @stepd/web --fail-if-no-match exec playwright install --with-deps chromium
       - name: 웹 스모크 (실브라우저)
         run: pnpm --filter @stepd/web --fail-if-no-match smoke
 
