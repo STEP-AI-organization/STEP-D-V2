@@ -160,9 +160,9 @@ const RESULT_LABEL: Record<string, string> = {
   held: "승인 대기", failed: "실패", skipped: "안 보냄",
 };
 const RESULT_TAG: Record<string, string> = {
-  published: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]", // 시작이지 완료가 아니다 — 완료(게시함)만 airing
+  published: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[var(--badge-text)]", // 시작이지 완료가 아니다 — 완료(게시함)만 airing
   recorded: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200",
-  media_created: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]",
+  media_created: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[var(--badge-text)]",
   held: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-amber-500/15 text-amber-600 dark:text-amber-400",
   failed: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-rose-500/15 text-rose-600 dark:text-rose-400",
   skipped: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200",
@@ -236,7 +236,7 @@ const ANALYZE_IDX = PIPELINE_STAGES.indexOf("analyze");
 /** 회차 배지 톤 — 원본(2단계 목록)은 초록 고정이다. 실패·보류가 그 색이면 안 된다. */
 const EP_TAG: Record<string, string> = {
   done: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  running: "bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]",
+  running: "bg-[#1C60FF]/10 text-[var(--badge-text)]",
   waiting: "bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300",
   failed: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
   novideo: "bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300",
@@ -256,7 +256,7 @@ function episodeAnalysis(ep: Episode, hasMaster: boolean): {
   }
   if (idx === ANALYZE_IDX && ep.pipeline.stageStatus === "progress") {
     const pct = typeof ep.pipeline.progress === "number" ? ` ${Math.round(ep.pipeline.progress)}%` : "";
-    return { key: "running", label: `분석 중${pct}`, tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]" };
+    return { key: "running", label: `분석 중${pct}`, tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[var(--badge-text)]" };
   }
   if (idx === ANALYZE_IDX) {
     return { key: "waiting", label: "분석 대기", tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200" };
@@ -1312,10 +1312,10 @@ export default function AutomationPage() {
                               checked={checked}
                               disabled={isInUse}
                               onChange={() => {}}
-                              className="w-4 h-4 rounded border-slate-300 dark:border-stone-700 text-[#1C60FF] focus:ring-[#1C60FF] cursor-pointer accent-[#1C60FF] shrink-0 disabled:opacity-40"
+                              className="w-4 h-4 rounded border-slate-300 dark:border-stone-700 text-[var(--text-accent)] focus:ring-[#1C60FF] cursor-pointer accent-[#1C60FF] shrink-0 disabled:opacity-40"
                             />
                             <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                              <span className={`text-xs font-bold truncate ${isInUse ? "opacity-50 text-[var(--color-text-primary)]" : checked ? "text-[#1C60FF]" : "text-[var(--color-text-primary)]"}`}>
+                              <span className={`text-xs font-bold truncate ${isInUse ? "opacity-50 text-[var(--color-text-primary)]" : checked ? "text-[var(--text-accent)]" : "text-[var(--color-text-primary)]"}`}>
                                 {o.label}
                               </span>
                               {occupied && (
@@ -1454,7 +1454,7 @@ export default function AutomationPage() {
             <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-stone-800/60 border-none shadow-none flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs mt-3">
               <span className="text-xs text-[var(--color-text-primary)] font-bold">채널당 하루 발행</span>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-sm text-[#1C60FF]">{perDayCount({ slots, dailyQuota })}개</span>
+                <span className="font-extrabold text-sm text-[var(--text-accent)]">{perDayCount({ slots, dailyQuota })}개</span>
                 <span className="text-xs text-[var(--color-text-muted)] font-medium">
                   {slots.length
                     ? "시각당 개수의 합 — 할당량은 쓰지 않습니다"
@@ -1747,7 +1747,7 @@ export default function AutomationPage() {
                       aspect={aspect}
                     />
                   </button>
-                  <div className="text-[10px] text-[var(--color-text-muted)] group-hover:text-[#1C60FF] font-medium transition-colors">
+                  <div className="text-[10px] text-[var(--color-text-muted)] group-hover:text-[var(--text-accent)] font-medium transition-colors">
                     클릭해 크게 보기
                   </div>
                 </div>

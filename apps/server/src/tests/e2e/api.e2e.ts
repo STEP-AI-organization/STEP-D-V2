@@ -192,3 +192,136 @@ describe("e2e — 워크스페이스 격리 (RLS)", () => {
     );
   });
 });
+
+/**
+ * `/api/state` 조건부 요청 — **안 바뀌었으면 본문을 안 보낸다.**
+ *
+ * 웹 스토어는 탭이 열려 있는 내내 이 라우트를 폴링하고(유휴 45초), 이 응답은 워크스페이스
+ * 전체다. 프로덕션은 프록시 경유라 그 바이트가 곧 Vercel Fast Origin Transfer 과금이다.
+ *
+ * 소스만 읽어서는 증명이 안 된다. 확인해야 하는 건 두 가지고 **둘 다 진짜 DB 가 필요하다**:
+ *   ① 아무것도 안 했을 때 같은 ETag 가 나오는가 (안 그러면 최적화가 조용히 무력화된다)
+ *   ② 데이터가 바뀌면 ETag 가 실제로 달라지는가 (안 그러면 **낡은 화면을 준다** — 이쪽이 위험하다)
+ */
+describe("e2e — /api/state 조건부 요청 (ETag)", () => {
+  const OWNER = { email: "owner@etag.e2e", password: "etag-owner-pw" };
+  /** 같은 회사에 발급한 API 키 — 조건부 응답에서 제외되는지 보려고 쓴다. */
+  let apiKey: string;
+
+  before(async () => {
+    const admin = new Session();
+    await admin.login(SUPERADMIN.email, SUPERADMIN.password);
+    const { status, body } = await admin.post<{ id?: string; error?: string }>(
+      "/api/superadmin/tenants",
+      { name: "이태그 방송", ownerEmail: OWNER.email, ownerPassword: OWNER.password, ownerName: "이태그 대표" },
+    );
+    assert.equal(status, 200, `회사 개설 실패: ${JSON.stringify(body)}`);
+
+    const key = await admin.post<{ key?: string; error?: string }>(
+      `/api/superadmin/tenants/${body.id}/api-keys`,
+      { name: "etag e2e", reason: "e2e — 조건부 응답 제외 확인" },
+    );
+    assert.equal(key.status, 200, `API 키 발급 실패: ${JSON.stringify(key.body)}`);
+    assert.ok(key.body.key, "발급 응답에 키가 없다");
+    apiKey = key.body.key!;
+  });
+
+  it("ETag 를 주고, 그걸 되돌려주면 304 + 빈 본문이다", async () => {
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+
+    const first = await s.fetch("/api/state");
+    assert.equal(first.status, 200);
+    const etag = first.headers.get("etag");
+    assert.ok(etag, "/api/state 가 ETag 를 안 준다 — 조건부 요청이 성립하지 않는다");
+    assert.ok((await first.text()).length > 0, "200 인데 본문이 비었다");
+
+    const second = await s.fetch("/api/state", { headers: { "if-none-match": etag! } });
+    assert.equal(second.status, 304, "안 바뀐 상태인데 304 가 아니다 — 폴링이 매번 전체를 받아간다");
+    assert.equal(await second.text(), "", "304 인데 본문이 실려 나갔다 — 아낀 게 없다");
+  });
+
+  it("데이터가 바뀌면 ETag 도 바뀐다 — 낡은 상태를 물고 있지 않는다", async () => {
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+
+    const before = await s.fetch("/api/state");
+    const etag = before.headers.get("etag");
+    await before.text();
+    assert.ok(etag);
+
+    const created = await s.post<{ program?: { id?: string } }>("/api/programs", {
+      title: "ETag 를 흔드는 프로그램",
+    });
+    assert.equal(created.status, 200, `프로그램 생성 실패: ${JSON.stringify(created.body)}`);
+
+    const after = await s.fetch("/api/state", { headers: { "if-none-match": etag! } });
+    assert.equal(
+      after.status, 200,
+      "프로그램을 만들었는데 304 가 돌아왔다 — 화면이 영원히 갱신되지 않는다",
+    );
+    assert.notEqual(after.headers.get("etag"), etag, "내용이 바뀌었는데 ETag 가 그대로다");
+  });
+
+  it("/api/state/progress 는 진행률만 주고 **전체보다 작다**", async () => {
+    // 쪼갠 이유가 크기다. 작지 않으면 라우트만 하나 늘린 셈이라 여기서 잡는다.
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+
+    const full = await (await s.fetch("/api/state")).text();
+    const res = await s.fetch("/api/state/progress");
+    assert.equal(res.status, 200);
+    const progress = await res.text();
+
+    assert.ok(
+      progress.length < full.length,
+      `진행률 응답(${progress.length}B)이 전체(${full.length}B)보다 작지 않다 — 쪼갠 의미가 없다`,
+    );
+
+    // 담는 것만 담는다. 클립·미디어·프로그램이 섞여 들어오면 다시 커진다.
+    const body = JSON.parse(progress) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(body).sort(), ["episodes", "jobs"]);
+  });
+
+  it("**API 키에는 304 를 주지 않는다** — 남의 연동에 조건부 응답을 떠넘기지 않는다", async () => {
+    // 아끼려는 바이트는 전부 브라우저 폴링 쪽이다. 외부 연동은 아낄 게 없는데 우리가 고칠 수
+    // 없는 코드라, ETag 만 되돌려주고 304 는 못 다루는 구현 하나면 그쪽이 조용히 깨진다.
+    const headers = { "x-api-key": apiKey };
+
+    const first = await fetch(`${BASE}/api/state`, { headers });
+    assert.equal(first.status, 200);
+    const etag = first.headers.get("etag");
+    await first.text();
+    assert.ok(etag, "API 키 응답에도 ETag 자체는 붙는다(캐시 검증용) — 없으면 전제가 바뀐 것");
+
+    const second = await fetch(`${BASE}/api/state`, { headers: { ...headers, "if-none-match": etag! } });
+    assert.equal(
+      second.status, 200,
+      "API 키 클라이언트가 304 를 받았다 — 본문을 기대하는 외부 연동이 빈 응답을 받는다",
+    );
+    assert.ok((await second.text()).length > 0, "200 인데 본문이 비었다");
+  });
+
+  it("/api/state/progress 도 로그인 없이는 못 본다", async () => {
+    // 전체 상태를 막아 두고 진행률은 열어 두면 회차 목록·단계가 그대로 샌다.
+    const anon = new Session();
+    assert.equal((await anon.json("/api/state/progress")).status, 401);
+  });
+
+  it("gzip 을 요구해도 304 는 그대로 304 다", async () => {
+    // `/api/*` 에는 compress() 가 걸려 있다. 본문 없는 응답을 압축하려 들면 깨진다 —
+    // hono 는 `!ctx.res.body` 로 건너뛰지만, 그 전제가 바뀌면 여기서 잡힌다.
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+
+    const first = await s.fetch("/api/state", { headers: { "accept-encoding": "gzip" } });
+    const etag = first.headers.get("etag");
+    await first.text();
+
+    const second = await s.fetch("/api/state", {
+      headers: { "if-none-match": etag!, "accept-encoding": "gzip" },
+    });
+    assert.equal(second.status, 304);
+    assert.equal(second.headers.get("content-encoding"), null, "빈 본문에 압축 헤더가 붙었다");
+  });
+});

@@ -122,7 +122,7 @@ export function CustomSelect({
         </span>
         <ChevronDown
           className={`w-4 h-4 text-[var(--color-text-muted)] absolute right-3 top-1/2 -translate-y-1/2 transition-transform duration-200 pointer-events-none ${
-            isOpen ? "rotate-180 text-[#1C60FF]" : ""
+            isOpen ? "rotate-180 text-[var(--text-accent)]" : ""
           }`}
         />
       </button>

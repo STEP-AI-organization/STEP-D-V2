@@ -221,7 +221,7 @@ export default function VideoSearchPage() {
                     className={`h-8 px-3 rounded-lg font-semibold transition-colors cursor-pointer select-none ${
                       typeFilter === k
                         ? "bg-[var(--color-bg-active)] text-white"
-                        : "text-[var(--color-text-secondary)] hover:text-[#1C60FF]"
+                        : "text-[var(--color-text-secondary)] hover:text-[var(--text-accent)]"
                     }`}
                   >
                     {label}

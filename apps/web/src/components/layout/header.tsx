@@ -14,7 +14,7 @@
  * ## Ctrl+K 는 이제 여기 하나뿐이다
  * 우리 `CommandPalette` 도 같은 키를 잡고 있었다. 둘 다 마운트하면 한 번 눌러 **모달이 두 개**
  * 뜬다. 디자이너 헤더가 검색 모달을 들고 오므로 `(app)/layout.tsx` 에서 CommandPalette 를
- * 내렸다(테스트 참조 0건 확인). 되살리려면 여기 리스너를 먼저 빼야 한다.
+ * 내렸고(2026-09-04), 파일 자체는 2026-09-14 에 지웠다 — 되살릴 거면 여기 리스너를 먼저 뺄 것.
  *
  * ## 주간 리포트는 **아직 만들지 않는다**
  * 원본의 안내 문구가 그 사실을 이미 정확히 적고 있다("리포트 파일 생성·전송은 아직 서버에
@@ -226,7 +226,7 @@ export function Header({ title = "대시보드", subtitle = "" }: HeaderProps) {
                       onClick={() => setScope(item as "전사" | "내 담당")}
                       className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold cursor-pointer transition-all duration-200 flex items-center justify-start gap-2.5 border select-none ${
                         isSelected
-                          ? "border-[#1C60FF] dark:border-blue-500 text-[#1C60FF] dark:text-blue-400 bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
+                          ? "border-[#1C60FF] dark:border-blue-500 text-[var(--badge-text)] bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
                           : "border-slate-200 dark:border-white text-slate-600 dark:text-white bg-slate-50/50 dark:bg-transparent hover:border-slate-300 dark:hover:border-white font-medium shadow-none"
                       }`}
                     >
@@ -263,7 +263,7 @@ export function Header({ title = "대시보드", subtitle = "" }: HeaderProps) {
                       }
                       className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold cursor-pointer transition-all duration-200 flex items-center justify-start gap-2.5 border select-none ${
                         isSelected
-                          ? "border-[#1C60FF] dark:border-blue-500 text-[#1C60FF] dark:text-blue-400 bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
+                          ? "border-[#1C60FF] dark:border-blue-500 text-[var(--badge-text)] bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
                           : "border-slate-200 dark:border-white text-slate-600 dark:text-white bg-slate-50/50 dark:bg-transparent hover:border-slate-300 dark:hover:border-white font-medium shadow-none"
                       }`}
                     >

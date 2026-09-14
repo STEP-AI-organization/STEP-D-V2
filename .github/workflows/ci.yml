@@ -57,6 +57,12 @@ jobs:
         run: pnpm -r typecheck
       - name: 서버 테스트
         run: pnpm --filter @stepd/server --fail-if-no-match test
+      # 2026-09-14 신설. 그전엔 apps/web 에 `test` 스크립트 자체가 없어서
+      # `src/lib/editor/reframe.test.ts`(6개)가 **한 번도 실행된 적이 없었다.**
+      # 웹은 파일 110개 중 85개가 클라이언트 컴포넌트라 타입체크·프리렌더로는
+      # 런타임 로직이 안 걸린다 — 관문이 `next build` 뿐이면 그 구멍이 그대로 남는다.
+      - name: 웹 테스트
+        run: pnpm --filter @stepd/web --fail-if-no-match test
       - name: 네이티브 테스트
         run: pnpm --filter stepaistudio --fail-if-no-match test
       - name: core 파이썬 테스트

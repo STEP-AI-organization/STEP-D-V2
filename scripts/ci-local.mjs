@@ -37,6 +37,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const STEPS = [
   { group: "check", name: "전 패키지 typecheck", cmd: "pnpm -r typecheck" },
   { group: "check", name: "서버 테스트", cmd: "pnpm --filter @stepd/server --fail-if-no-match test" },
+  { group: "check", name: "웹 테스트", cmd: "pnpm --filter @stepd/web --fail-if-no-match test" },
   { group: "check", name: "네이티브 테스트", cmd: "pnpm --filter stepaistudio --fail-if-no-match test" },
   { group: "check", name: "core 파이썬 테스트", cmd: "node scripts/test-core.mjs --required" },
   {

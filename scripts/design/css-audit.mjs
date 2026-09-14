@@ -32,8 +32,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const ORIG = process.env.STEPD_DESIGN_SRC
-  || "C:/Users/STEPAI05/Downloads/STEPD_SaaS_UI_V1/src";
+// 리포에 없는 로컬 산출물이라 경로가 사람 PC 사정에 달려 있다 — 2026-09-11 Downloads 정리
+// 때 옮겨져서 도구가 통째로 "원본없음" 을 뱉었다. 알려진 자리를 순서대로 본다.
+const CANDIDATES = [
+  process.env.STEPD_DESIGN_SRC,
+  "C:/Users/STEPAI05/Downloads/01_STEP프로젝트/STEP-D_UI·디자인/STEPD_SaaS_UI_V1/src",
+  "C:/Users/STEPAI05/Downloads/STEPD_SaaS_UI_V1/src",
+].filter(Boolean);
+const ORIG = CANDIDATES.find((p) => fs.existsSync(p)) ?? CANDIDATES[CANDIDATES.length - 1];
 const OURS = path.resolve(import.meta.dirname, "../../apps/web/src");
 
 /** 디자이너 화면 → 우리 화면. (app) 그룹과 파일명이 달라 손으로 맞춘다. */
@@ -72,7 +78,17 @@ function isUtility(c) {
   return /^[a-z0-9[]/.test(c);
 }
 
-function classesOf(src) {
+/**
+ * ⚠️ **주석을 먼저 걷어낸다.** 안 그러면 설명에 적은 클래스 이름이 "우리가 쓰는 것" 으로
+ * 잡혀 **거짓 음성**이 된다 — 실제로 `tokens.ts` 주석의 "Tailwind `max-w-*` 등가" 때문에
+ * 모달 폭 4종이 통째로 일치로 보였다(2026-09-14). 누락을 못 찾는 건 과잉 검출보다 나쁘다.
+ */
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+}
+
+function classesOf(raw) {
+  const src = stripComments(raw);
   const out = new Set();
   const add = (blob) => {
     // ${...} 보간을 통째로 지운 뒤 토큰을 나눈다 — 안 지우면 변수 조각이 클래스로 샌다.
@@ -89,6 +105,13 @@ function classesOf(src) {
   // 3토큰 이상만 보면 그런 게 통째로 "누락" 으로 잡혀 거짓 양성이 된다.
   const re2 = /["`]((?:[a-z][\w[\]().,#/%:-]*\s+){1,}[a-z][\w[\]().,#/%:-]*)["`]/g;
   while ((m = re2.exec(src))) add(m[1]);
+
+  // **1토큰 문자열**도 본다 — `cond ? "text-rose-500" : "text-emerald-500"` 같은 삼항.
+  // 다만 아무 문자열이나 담으면 "done"·"error" 같은 상태값이 클래스로 샌다. 그래서
+  // **Tailwind 접두사로 시작하는 것만** 인정한다.
+  const PREFIX = /^(?:(?:hover|focus|active|group-hover|dark|sm|md|lg|xl|2xl|disabled):)*(?:bg|text|border|ring|shadow|from|via|to|fill|stroke|w|h|min|max|p|px|py|m|mx|my|gap|rounded|opacity|z|grid|flex|items|justify|aspect|animate|leading|tracking|font|cursor|overflow|absolute|relative|inset|top|bottom|left|right|space|divide|whitespace|truncate|underline)-/;
+  const re3 = /["`]([a-z][\w[\]().,#/%:-]*)["`]/g;
+  while ((m = re3.exec(src))) if (PREFIX.test(m[1])) out.add(m[1]);
   return out;
 }
 

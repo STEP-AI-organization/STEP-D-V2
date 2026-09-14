@@ -288,7 +288,7 @@ export default function DashboardPage() {
                         <span
                           className={`inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-colors ${
                             i === 0
-                              ? "bg-[#1C60FF]/15 text-[#1C60FF] dark:text-blue-400 border border-[#1C60FF]/30"
+                              ? "bg-[#1C60FF]/15 text-[var(--badge-text)] border border-[#1C60FF]/30"
                               : "bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80"
                           }`}
                         >
@@ -407,7 +407,7 @@ function RevenueTooltip({ active, payload }: RevenueTooltipProps) {
         </div>
         <div className="flex items-center justify-between gap-4 pt-1">
           <span className="text-[11px] text-[var(--color-text-secondary)]">일일 수익</span>
-          <span className="font-bold text-[#1C60FF] text-xs">₩{data.amount.toLocaleString()}</span>
+          <span className="font-bold text-[var(--text-accent)] text-xs">₩{data.amount.toLocaleString()}</span>
         </div>
       </div>
     );

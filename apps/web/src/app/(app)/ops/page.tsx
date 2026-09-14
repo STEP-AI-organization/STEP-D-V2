@@ -87,7 +87,7 @@ const renderStatusTag = (status: "pending" | "running" | "done" | "failed" | "�
   switch (status) {
     case "running":
       return (
-        <span className="px-2.5 py-0.5 rounded-full text-[10.5px] bg-[#1C60FF]/15 text-[#1C60FF] font-medium border-none inline-flex items-center gap-1.5">
+        <span className="px-2.5 py-0.5 rounded-full text-[10.5px] bg-[#1C60FF]/15 text-[var(--text-accent)] font-medium border-none inline-flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-[#1C60FF] shrink-0" />
           <span>running</span>
         </span>
@@ -189,7 +189,7 @@ export default function OpDiagPage() {
               <button
                 onClick={() => setAutoRefresh(!autoRefresh)}
                 title={autoRefresh ? "자동 새로고침 켜짐 — 누르면 멈춥니다" : "자동 새로고침 꺼짐 — 누르면 5초마다 갱신합니다"}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] hover:text-[#1C60FF] text-xs text-[var(--color-text-primary)] transition-all cursor-pointer font-bold shadow-md shadow-slate-900/5 dark:shadow-none"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] hover:text-[var(--text-accent)] text-xs text-[var(--color-text-primary)] transition-all cursor-pointer font-bold shadow-md shadow-slate-900/5 dark:shadow-none"
               >
                 {autoRefresh
                   ? <Pause className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
@@ -199,7 +199,7 @@ export default function OpDiagPage() {
               <button
                 onClick={() => { void load(); }}
                 disabled={refreshing}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] hover:text-[#1C60FF] text-xs text-[var(--color-text-primary)] transition-all cursor-pointer font-bold shadow-md shadow-slate-900/5 dark:shadow-none disabled:cursor-not-allowed disabled:opacity-70"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] hover:text-[var(--text-accent)] text-xs text-[var(--color-text-primary)] transition-all cursor-pointer font-bold shadow-md shadow-slate-900/5 dark:shadow-none disabled:cursor-not-allowed disabled:opacity-70"
               >
                 <RotateCw className={`w-3.5 h-3.5 text-[var(--color-text-muted)] ${refreshing ? "animate-spin" : ""}`} />
                 <span>새로고침</span>
@@ -231,7 +231,7 @@ export default function OpDiagPage() {
               <div className="text-xs text-[var(--color-text-muted)] font-semibold">
                 <span>실행 중 (running)</span>
               </div>
-              <div className="text-3xl font-extrabold text-[#1C60FF] tracking-tight">
+              <div className="text-3xl font-extrabold text-[var(--text-accent)] tracking-tight">
                 {stat(jobs?.stats?.running)}
               </div>
             </div>
