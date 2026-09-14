@@ -150,3 +150,48 @@ describe("잔액은 그때 값이어야 한다", () => {
     assert.match(body, /reason = 'topup'/, "충전 행이 아닌 것을 기준으로 삼는다");
   });
 });
+
+/**
+ * **크레딧을 적립하는 곳은 전부 영수증을 보낸다.**
+ *
+ * 2026-09-14: 어드민 시험 결제(`card-test-charge.ts`)에 이게 빠져 있었다. 결제는 되고
+ * 크레딧도 올라가는데 영수증만 안 나갔다 — 그러면 시험이 "결제는 되는데 영수증은 안 나가는"
+ * 절반만 증명하고, **인보이스 메일이 실제로 나가는지는 영원히 확인 못 한다.**
+ *
+ * 조용한 종류다: 결제 로그도 원장도 멀쩡하고, 안 온 메일은 아무 데도 안 남는다.
+ * 그래서 "적립했으면 보낸다" 를 코드 배치로 고정한다.
+ */
+describe("적립하는 곳은 영수증을 보낸다", () => {
+  const PATHS = [
+    ["자동 충전", path.join(SRC, "billing", "auto-topup.ts")],
+    ["운영자 시험 결제", path.join(SRC, "billing", "card-test-charge.ts")],
+    ["수동 저장카드 충전", path.join(SRC, "index.ts")],
+  ] as const;
+
+  for (const [label, file] of PATHS) {
+    it(`${label} 이 sendInvoiceEmail 을 부른다`, () => {
+      const src = code(read(file));
+      assert.match(src, /sendInvoiceEmail\(/,
+        `${label} 이 영수증을 안 보낸다 — 결제·적립은 되는데 고객은 아무 통지도 못 받는다`);
+    });
+
+    it(`${label} 은 **실제로 적립했을 때만** 보낸다 (중복 발송 방지)`, () => {
+      const src = code(read(file));
+      // 웹훅이 먼저 정산했으면 거기서 이미 보냈다 — addCreditEntry 의 반환값이 그 판정이다.
+      assert.match(src, /if \(\w*[Cc]redited\) void sendInvoiceEmail\(/,
+        `${label} 이 적립 여부와 무관하게 보낸다 — 한 결제에 영수증이 두 번 갈 수 있다`);
+    });
+  }
+
+  /**
+   * 영수증이 **한 벌에서만** 만들어지는지 본다. 메일과 화면이 각자 인보이스를 조립하면
+   * 번호·금액이 갈린다 — 그건 고객이 두 문서를 나란히 놓고 묻는 상황이 된다.
+   */
+  it("메일과 화면이 같은 빌더(invoiceFromTopup)를 쓴다", () => {
+    assert.match(code(read(path.join(SRC, "billing", "invoice-email.ts"))), /invoiceFromTopup\(/);
+    const index = code(read(path.join(SRC, "index.ts")));
+    const route = index.slice(index.indexOf('app.get("/api/credits/invoices"'));
+    assert.match(route.slice(0, 1200), /invoiceFromTopup\(/,
+      "화면용 인보이스를 따로 조립한다 — 번호·역산이 메일과 갈릴 수 있다");
+  });
+});

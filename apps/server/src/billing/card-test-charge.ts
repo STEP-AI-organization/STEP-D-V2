@@ -25,6 +25,7 @@ import {
 import { cardBlockReason, cardTopupPaymentId, declineMessage, verifyCharge } from "./billing-card.ts";
 import { buildTopup, topupDedupeKey } from "./credits.ts";
 import { chargeWithBillingKey, getPayment } from "./portone.ts";
+import { sendInvoiceEmail } from "./invoice-email.ts";
 
 /**
  * 시험 결제로 한 번에 긁을 수 있는 최대 크레딧. **10개 = ₩660.**
@@ -143,7 +144,7 @@ export async function runTestCharge(input: {
 
   // ⚠️ **원장이 먼저다.** 상태를 먼저 paid 로 찍고 그 사이에서 던지면 재시도가 'paid' 가드에
   // 막혀 크레딧이 영구히 사라진다. 제품 경로와 같은 순서를 일부러 지킨다.
-  await addCreditEntry({
+  const credited = await addCreditEntry({
     delta: check.credits,
     reason: "topup",
     paymentId,
@@ -153,6 +154,17 @@ export async function runTestCharge(input: {
     dedupeKey: topupDedupeKey(paymentId),
   });
   await markTopupPaid(paymentId, "paid");
+  /**
+   * 영수증 메일 — **운영 경로와 같은 자리에서, 같은 조건으로.**
+   *
+   * 처음엔 이걸 빠뜨렸다. 그러면 시험이 "결제는 되는데 영수증은 안 나가는" 절반만
+   * 증명하고, 정작 **인보이스 메일이 실제로 나가는지는 영원히 확인 못 한다** — 이 시험의
+   * 목적이 운영 경로를 그대로 밟는 것인데 마지막 고리에서 갈라지는 셈이다.
+   *
+   * `credited` 일 때만 보내는 것도 같다(웹훅이 먼저 정산했으면 거기서 이미 보냈다).
+   * fire-and-forget — 메일 실패가 결제·적립 결과를 뒤집으면 안 된다.
+   */
+  if (credited) void sendInvoiceEmail(paymentId, input.tenantId);
 
   return {
     status: 200,
