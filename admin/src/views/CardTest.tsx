@@ -71,8 +71,9 @@ export function CardTest() {
       await api.registerBillingCard(tid, {
         credential: {
           number: num, expiryMonth: mm, expiryYear: yy,
-          ...(idn.trim() ? { birthOrBusinessRegistrationNumber: idn.trim() } : {}),
-          ...(pw2.trim() ? { passwordTwoDigits: pw2.trim() } : {}),
+          // 버튼이 빈 값으로는 안 열린다(missingFor) — 조건부로 넣지 않는다.
+          birthOrBusinessRegistrationNumber: idn.trim(),
+          passwordTwoDigits: pw2.trim(),
         },
         buyer: { fullName: buyerName.trim(), email: buyerEmail.trim(), phoneNumber: buyerPhone.trim() },
         reason: reason.trim(),
@@ -112,7 +113,10 @@ export function CardTest() {
       need.push(
         !num.trim() && "카드번호",
         (!mm.trim() || !yy.trim()) && "유효기간(MM/YY)",
-        // 이니시스 빌링키 결제의 필수 3종 — 없이 발급하면 결제 단계에서 거절된다.
+        // 카드사가 둘 다 요구한다 — 비우면 **발급 단계**에서 거절된다(2026-09-14 실측).
+        !idn.trim() && "생년월일/사업자번호",
+        !pw2.trim() && "카드 비밀번호 앞 2자리",
+        // 이니시스 빌링키 결제의 필수 3종 — 없이 발급하면 **결제 단계**에서 거절된다.
         !buyerName.trim() && "구매자 이름",
         !buyerEmail.trim() && "구매자 이메일",
         !buyerPhone.trim() && "구매자 휴대폰",
