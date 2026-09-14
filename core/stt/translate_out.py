@@ -213,7 +213,19 @@ def translate_out(
         for j, i in enumerate(idxs):
             text = str(out[i]["text"])
             lines.append(f"{j + 1}. [≤{_max_chars(text, lang)}자] {text}")
-        numbered = "\n".join(lines)
+        # ⚠️ **목표 언어를 맨 뒤에 한 번 더 박는다.** system_instruction 에만 두면 긴 입력
+        # 뒤쪽에서 밀린다 — 특히 **본문이 외국어·외국을 다루는 구간**에서 그렇다.
+        # 실측(2026-09-14 · 같은 60줄 배치 반복): "프랑스어 배우기" 구간에서
+        # flash-lite 가 4번 중 3번을 **영어로** 번역했다. 다른 내용 구간(offset 120·240)은
+        # 3번씩 전부 정상이었으니 모델 고장이 아니라 **그 입력이 목표 언어를 덮은 것**이다.
+        # 오류가 안 나고 refined.{lang}.json 이 그대로 저장되므로 발행 뒤에야 안다.
+        #
+        # 캐싱은 안 깨진다 — 고정부(system)는 그대로고 이 줄은 변동부(user) 맨 뒤다.
+        numbered = (
+            "\n".join(lines)
+            + f"\n\n위 {len(lines)}줄을 전부 **{lang.name_ko}({lang.name_en})** 로 옮겨라."
+            + f" 본문이 다른 나라·다른 언어를 이야기하더라도 출력 언어는 {lang.name_ko} 다."
+        )
         try:
             resp = call_with_retry(lambda: client.models.generate_content(
                 model=MODEL,
