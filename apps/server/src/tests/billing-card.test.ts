@@ -25,6 +25,7 @@ import {
   cardLabel,
   cardTopupPaymentId,
   checkCustomer,
+  pgNotifyEmail,
   extractCardDisplay,
   issueIdFor,
   normalizePhone,
@@ -72,21 +73,42 @@ describe("빌링 설정", () => {
   });
 });
 
+/**
+ * KG이니시스 빌링키에 필요한 고객 정보.
+ *
+ * ⚠️ 2026-09-14: **이메일을 사람에게 안 받기로 했다.** PG 로 가는 `customer.email` 은
+ * 이니시스가 자기 결제완료 메일을 보내는 주소라, 거기에 소비자 주소를 실으면 한 결제에
+ * 메일이 두 통 간다(이니시스 것 + 우리 영수증). 그 자리를 **우리 주소**로 고정했다
+ * (`pgNotifyEmail`) — 그래서 검사 대상은 **이름·휴대폰 둘**뿐이다.
+ * 배선 정본: `docs/ops/billing-emails.md`
+ */
 describe("KG이니시스 필수 고객정보", () => {
-  const ok = { fullName: "홍길동", email: "a@b.kr", phoneNumber: "010-1234-5678" };
+  const ok = { fullName: "홍길동", phoneNumber: "010-1234-5678" };
 
-  it("셋 다 있으면 통과하고 전화번호는 숫자만 남는다", () => {
+  it("둘 다 있으면 통과하고 전화번호는 숫자만 남는다", () => {
     const r = checkCustomer(ok);
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.equal(r.customer.phoneNumber, "01012345678");
   });
 
-  it("하나라도 없으면 결제창을 안 띄운다", () => {
-    for (const k of ["fullName", "email", "phoneNumber"] as const) {
+  it("**이메일은 우리 주소로 채워진다** — 입력값이 아니다", () => {
+    const r = checkCustomer({ ...ok, email: "consumer@example.com" });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.customer.email, pgNotifyEmail(),
+      "소비자가 넣은 주소가 그대로 PG 로 간다 — 이니시스 메일이 고객에게 가서 두 통이 된다");
+  });
+
+  it("하나라도 없으면 요청을 안 보낸다", () => {
+    for (const k of ["fullName", "phoneNumber"] as const) {
       const r = checkCustomer({ ...ok, [k]: "" });
       assert.equal(r.ok, false, `${k} 없이 통과했다`);
     }
+  });
+
+  it("이메일이 없어도 통과한다 — 안 받기로 했으니 막으면 등록이 전부 실패한다", () => {
+    assert.equal(checkCustomer(ok).ok, true);
   });
 
   it("무엇이 없는지 이름을 말해준다", () => {
@@ -94,19 +116,13 @@ describe("KG이니시스 필수 고객정보", () => {
     const r = checkCustomer({});
     assert.equal(r.ok, false);
     if (r.ok) return;
-    assert.deepEqual(r.missing, ["이름", "이메일", "휴대폰번호"]);
+    assert.deepEqual(r.missing, ["이름", "휴대폰번호"]);
   });
 
   it("전화번호 자릿수를 본다", () => {
     assert.equal(checkCustomer({ ...ok, phoneNumber: "010123" }).ok, false, "너무 짧다");
     assert.equal(checkCustomer({ ...ok, phoneNumber: "0101234567890" }).ok, false, "너무 길다");
     assert.equal(normalizePhone("+82 10-1234-5678"), "821012345678");
-  });
-
-  it("이메일 오타를 잡는다", () => {
-    for (const bad of ["a", "a@", "@b.kr", "a@b"]) {
-      assert.equal(checkCustomer({ ...ok, email: bad }).ok, false, bad);
-    }
   });
 });
 

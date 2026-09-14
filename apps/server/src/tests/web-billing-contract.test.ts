@@ -167,3 +167,44 @@ describe("카드 확인정보는 폼에서 필수다", () => {
     assert.match(CREDENTIAL, /if \(password && !/);
   });
 });
+
+/**
+ * **PG 로 나가는 이메일은 우리 주소다** — 소비자 주소가 아니다.
+ *
+ * 이니시스는 결제 요청의 `customer.email` 로 자기 결제완료 메일을 보낸다. 거기에 소비자
+ * 주소를 실으면 한 결제에 메일이 두 통 간다 — 이니시스 것(문구를 우리가 통제 못 함)과
+ * 우리 영수증. 역할을 갈랐다(2026-09-14): **이니시스 = 우리 확인용 · 영수증 = 우리 서버가**.
+ *
+ * 정본 문서: `docs/ops/billing-emails.md`
+ */
+describe("PG 알림 주소는 우리 것이다", () => {
+  const PORTONE = read(SRC, "billing", "portone.ts");
+
+  it("발급·결제 **두 호출 모두** pgNotifyEmail 을 쓴다", () => {
+    // 한쪽만 고치면 그 경로에서만 소비자에게 메일이 간다 — 재현이 어려운 종류다.
+    const uses = [...PORTONE.matchAll(/email: pgNotifyEmail\(\)/g)];
+    assert.equal(uses.length, 2, `pgNotifyEmail 을 ${uses.length}곳에서 쓴다 — 발급·결제 둘이어야 한다`);
+    assert.ok(!/email: input\.customer\.email/.test(PORTONE),
+      "부르는 쪽이 준 이메일을 그대로 PG 로 보낸다 — 소비자에게 이니시스 메일이 간다");
+  });
+
+  it("기본값이 우리 주소이고 env 로 바꿀 수 있다", () => {
+    const card = read(SRC, "billing", "billing-card.ts");
+    assert.match(card, /PG_NOTIFY_EMAIL/, "env 로 못 바꾼다 — 주소를 바꾸려면 배포해야 한다");
+    assert.match(card, /"contact@stepai\.kr"/, "기본값이 우리 주소가 아니다");
+  });
+
+  it("**소비자에게 이메일을 묻지 않는다** — 제품·어드민 둘 다", () => {
+    const web = read(REPO, "apps", "web", "src", "app", "(app)", "credits", "page.tsx");
+    assert.ok(!web.includes('aria-label="구매자 이메일"'),
+      "제품 화면이 구매자 이메일을 받는다 — 그 값이 PG 로 가면 두 통 문제가 재발한다");
+    const admin = read(REPO, "admin", "src", "views", "CardTest.tsx");
+    assert.ok(!admin.includes("buyerEmail"),
+      "어드민만 이메일을 더 받는다 — 필드가 다르면 어드민 시험이 제품을 재현하지 못한다");
+  });
+
+  it("서버가 이메일을 필수로 요구하지 않는다 — 안 받기로 했으니 막으면 안 된다", () => {
+    assert.ok(!/missing\.push\("이메일"\)/.test(BILLING_CARD),
+      "checkCustomer 가 여전히 이메일을 요구한다 — 화면에서 뺐으니 등록이 전부 400 이 된다");
+  });
+});

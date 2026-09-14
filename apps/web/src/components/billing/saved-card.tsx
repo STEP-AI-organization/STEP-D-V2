@@ -52,7 +52,7 @@ export function SavedCardManager({
 }: {
   canManage: boolean;
   /** 구매자 정보 — 카드 등록(registerCard)에 필요하다. 부모가 같은 화면에서 입력받는다. */
-  buyer: { fullName: string; email: string; phoneNumber: string };
+  buyer: { fullName: string; phoneNumber: string };
   /**
    * 구매자 3종이 유효한가 — **버튼을 미리 막는 근거**(2026-08-26).
    * 예전엔 이 가드가 없어 빈 전화번호로도 눌렸고, 사용자는 서버 400 토스트만 보고

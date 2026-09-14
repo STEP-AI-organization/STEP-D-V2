@@ -1846,7 +1846,13 @@ export interface CardCredentialInput {
 
 export async function registerCard(input: {
   credential: CardCredentialInput;
-  buyer: { fullName: string; email: string; phoneNumber: string };
+  /**
+   * ⚠️ **이메일은 안 보낸다** (2026-09-14). PG 로 가는 `customer.email` 은 이니시스가 자기
+   * 결제완료 메일을 보내는 주소라, 서버가 **우리 것으로 고정**한다(`pgNotifyEmail`).
+   * 고객 영수증은 결제 알림 이메일 목록으로 우리 서버가 보낸다.
+   * 배선: `docs/ops/billing-emails.md`
+   */
+  buyer: { fullName: string; phoneNumber: string };
   autoChargeConsent: true;
 }): Promise<void> {
   const res = await fetch(`${API_BASE}/billing/card/issue`, {

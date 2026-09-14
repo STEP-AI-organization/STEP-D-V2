@@ -15,7 +15,7 @@
  */
 import crypto from "node:crypto";
 import type { CardCredential } from "./card-credential.ts";
-import type { CustomerInfo } from "./billing-card.ts";
+import { pgNotifyEmail, type CustomerInfo } from "./billing-card.ts";
 
 const API_BASE = "https://api.portone.io";
 
@@ -101,7 +101,9 @@ export async function issueBillingKey(input: {
       customer: {
         id: input.customerId,
         name: { full: input.customer.fullName },
-        email: input.customer.email,
+        // ⚠️ 소비자 주소가 아니라 **우리 주소**다(pgNotifyEmail 주석). 부르는 쪽이 무엇을
+        //    넘기든 여기서 덮는다 — 이니시스 완료 메일은 판매자인 우리가 받는다.
+        email: pgNotifyEmail(),
         phoneNumber: input.customer.phoneNumber,
       },
       method: { card: { credential: input.credential } },
@@ -162,7 +164,8 @@ export async function chargeWithBillingKey(input: BillingKeyChargeInput): Promis
     // V2 형식 — name 은 평문이 아니라 { full } 객체다. 평문으로 보내면 형식 오류.
     customer: {
       name: { full: input.customer.fullName },
-      email: input.customer.email,
+      // 발급과 같은 이유로 **우리 주소**다 — 결제 건마다 이니시스가 여기로 완료 메일을 보낸다.
+      email: pgNotifyEmail(),
       phoneNumber: input.customer.phoneNumber,
     },
   });
