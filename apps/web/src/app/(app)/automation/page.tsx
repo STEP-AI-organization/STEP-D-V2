@@ -220,6 +220,22 @@ const TEMPLATE_SEED_UI: Record<string, { accent: string; titleY: number; iconY: 
   "broadcast-drama": { accent: "#F3AF4F", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
 };
 
+/**
+ * 배포 언어 픽커 — 서버 `caption-lang.ts` 의 `CAPTION_LANGS` 미러.
+ *
+ * 이 값 하나가 **자막·제목·메타·글꼴·유튜브 캡션트랙**을 전부 바꾼다(계획이 곧 스위치 ·
+ * env 를 쓰지 않는다). 그래서 서버 표와 코드 집합이 갈라지면 화면에서 고를 수 있는데
+ * 서버가 모르는 언어가 생기고, 그건 `langOf` 가 **조용히 한국어로** 떨어뜨린다 —
+ * 고객은 인도네시아어를 골랐는데 한국어가 나간다.
+ * `caption-lang.test.ts` 의 미러 검사가 두 목록의 코드 집합 일치를 강제한다.
+ */
+const PUBLISH_LANGS_UI: { code: string; label: string }[] = [
+  { code: "ko", label: "한국어" },
+  { code: "vi", label: "베트남어 (Tiếng Việt)" },
+  { code: "id", label: "인도네시아어 (Bahasa Indonesia)" },
+  { code: "en", label: "영어 (English)" },
+];
+
 /** 계획의 채널 목록 — 배열이 정본, 없으면 단수 폴백(구 계획). */
 const channelsOf = (r: AutomationRule) =>
   r.channels?.length ? r.channels : [{ platform: r.platform, accountId: r.accountId }];
@@ -358,6 +374,9 @@ export default function AutomationPage() {
   // 자막 on/off — 계획 기본 ON(하위호환). 끄면 이 계획의 자동 클립을 자막 없이 렌더한다.
   // 저장 시 layout.subtitles 로 담긴다(automation_rule 에 자막 전용 컬럼 없이 라운드트립).
   const [subtitles, setSubtitles] = useState(true);
+  // 배포 언어 — layout.lang 으로 라운드트립한다(subtitles 와 같은 방식).
+  // 기본 "ko" 는 기존 계획(필드 없음)의 동작을 그대로 유지한다.
+  const [lang, setLang] = useState("ko");
   // AI 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계("ai"|"none")·같은 라벨.
   // 기본 "none" = 중앙 고정 크롭(서버 factory 의 basicReframeState 기본과 동일).
   const [reframe, setReframe] = useState<AdoptReframe>("none");
@@ -500,6 +519,9 @@ export default function AutomationPage() {
     setReframe(r.reframe ?? "none"); // 구 계획(필드 없음)은 기본과 같은 "none"
     setAspect(r.aspect ?? ""); // 구 계획(필드 없음)은 '자동' — 저장해도 영상창이 안 바뀐다
     setSubtitles(r.layout?.subtitles !== false); // 구 계획(필드 없음)은 기본 ON
+    // 모르는 코드는 화면에서도 한국어로 보여야 한다 — 서버 langOf 가 그렇게 떨어뜨리므로
+    // 여기서 그대로 보여주면 "고른 값과 나가는 값이 다른" 상태가 화면에만 안 보인다.
+    setLang(PUBLISH_LANGS_UI.some((l) => l.code === r.layout?.lang) ? String(r.layout!.lang) : "ko");
     if (r.layout) {
       const seed = TEMPLATE_SEED_UI[r.templateId || "broadcast-standard"] ?? TEMPLATE_SEED_UI["broadcast-standard"];
       skipLayoutReset.current = true; // 템플릿 리셋 이펙트가 이 값을 덮지 않게
@@ -796,7 +818,7 @@ export default function AutomationPage() {
         ...(templateId ? { templateId } : {}),
         // 자막 위치·크기·색(layout)과 자막 on/off(subtitles)를 layout JSONB 안에 함께 보낸다 —
         // automation_rule 에 자막 전용 컬럼을 두지 않고 라운드트립시킨다.
-        layout: layout ? { ...layout, subtitles } : { subtitles },
+        layout: layout ? { ...layout, subtitles, lang } : { subtitles, lang },
       });
       const r = await runAutomationNow();
       toast({
@@ -1756,6 +1778,33 @@ export default function AutomationPage() {
                 </div>
               </div>
             )}
+
+            {/* 배포 언어 — 이 값 하나가 자막·제목·메타·글꼴·유튜브 캡션트랙을 전부 바꾼다.
+                계획이 곧 스위치다(env 를 쓰지 않는다 — 켜는 곳이 둘이면 한쪽만 켜지고 조용히 어긋난다). */}
+            <div className="space-y-2 pt-1">
+              <label className="block text-xs font-bold text-[var(--color-text-primary)]">배포 언어</label>
+              <div className="w-full sm:w-72">
+                <CustomSelect
+                  options={PUBLISH_LANGS_UI.map((l) => ({ value: l.code, label: l.label }))}
+                  value={lang}
+                  onChange={(v) => setLang(v)}
+                  ariaLabel="배포 언어"
+                  triggerClassName="bg-[var(--color-bg-input)] text-[var(--color-text-primary)] text-xs py-2.5 px-4 rounded-xl border border-[var(--color-border-subtle)] w-full"
+                />
+              </div>
+              {lang !== "ko" && (
+                /* ⚠️ 이 경고를 빼지 말 것. 이미 분석이 끝난 회차는 번역 자산이 없어서 계획에
+                   언어를 넣어도 **한국어 자막이 그대로 나간다**(발행이 막히지도 않는다).
+                   재분석해야 붙는다 — 모르면 "언어를 골랐는데 왜 한국어지" 를 한참 찾는다. */
+                <p className="text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+                  자막·제목·설명·해시태그가 이 언어로 나갑니다.
+                  <br />
+                  <span className="text-[var(--color-text-primary)]">
+                    ⚠️ 이미 분석이 끝난 회차는 번역이 없어 한국어 자막이 그대로 나갑니다 — 다시 분석해야 언어가 붙습니다.
+                  </span>
+                </p>
+              )}
+            </div>
 
             {/* 자막 켜기 — 계획 기본 ON. 끄면 이 계획의 자동 클립을 자막(STT 번인) 없이 렌더한다
                 (드라마 등 원본에 자막이 이미 있는 회차용). 위 미리보기의 자막도 함께 사라진다. */}
