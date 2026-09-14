@@ -37,8 +37,8 @@ export function CardTest() {
   const [yy, setYy] = useState("");
   const [idn, setIdn] = useState("");
   const [pw2, setPw2] = useState("");
+  // 구매자 — **실제 웹과 같은 두 칸**이다. 이메일은 안 받는다(PG 알림 주소는 우리 것으로 고정).
   const [buyerName, setBuyerName] = useState("");
-  const [buyerEmail, setBuyerEmail] = useState("");
   const [buyerPhone, setBuyerPhone] = useState("");
 
   const [credits, setCredits] = useState(1);
@@ -75,7 +75,7 @@ export function CardTest() {
           birthOrBusinessRegistrationNumber: idn.trim(),
           passwordTwoDigits: pw2.trim(),
         },
-        buyer: { fullName: buyerName.trim(), email: buyerEmail.trim(), phoneNumber: buyerPhone.trim() },
+        buyer: { fullName: buyerName.trim(), phoneNumber: buyerPhone.trim() },
         reason: reason.trim(),
       });
       // 성공하면 원문을 화면에서 지운다 — 남겨 둘 이유가 없다.
@@ -116,9 +116,9 @@ export function CardTest() {
         // 카드사가 둘 다 요구한다 — 비우면 **발급 단계**에서 거절된다(2026-09-14 실측).
         !idn.trim() && "생년월일/사업자번호",
         !pw2.trim() && "카드 비밀번호 앞 2자리",
-        // 이니시스 빌링키 결제의 필수 3종 — 없이 발급하면 **결제 단계**에서 거절된다.
+        // 이니시스 빌링키 결제의 필수값 — 없이 발급하면 **결제 단계**에서 거절된다.
+        // 이메일은 안 받는다: PG 로 가는 주소는 서버가 우리 것으로 고정한다(pgNotifyEmail).
         !buyerName.trim() && "구매자 이름",
-        !buyerEmail.trim() && "구매자 이메일",
         !buyerPhone.trim() && "구매자 휴대폰",
       );
     } else {
@@ -203,9 +203,6 @@ export function CardTest() {
           {/* KG이니시스 빌링키 결제는 이 셋이 **필수**다 — 없으면 발급돼도 결제가 거절된다. */}
           <Field label="구매자 이름 (필수)">
             <input value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
-          </Field>
-          <Field label="구매자 이메일 (필수)">
-            <input value={buyerEmail} onChange={(e) => setBuyerEmail(e.target.value)} />
           </Field>
           <Field label="구매자 휴대폰 (필수)">
             <input placeholder="01012345678" value={buyerPhone} onChange={(e) => setBuyerPhone(e.target.value)} />

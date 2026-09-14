@@ -125,9 +125,9 @@ export default function CreditsPage() {
   // 자동 재결제 상태 — **표시 전용**이다(2026-08-26 고정 정책). 켜짐 여부는 카드 등록에서
   // 파생되므로 화면이 바꿀 수 있는 값이 아니고, 금액도 서버가 정본이다.
   const [auto, setAuto] = useState<AutoTopupState | null>(null);
-  // **PG 가 구매자 이메일을 필수로 요구한다**(이니시스 V2 일반결제). 세션에 있으면 채우고,
-  // 없으면 사람이 입력한다 — 지금은 로그인이 강제되지 않아 세션 이메일이 빌 수 있다.
-  const [email, setEmail] = useState("");
+  // ⚠️ **구매자 이메일은 안 받는다** (2026-09-14). PG 로 가는 `customer.email` 은 이니시스가
+  //    자기 완료 메일을 보내는 주소라 **우리 것으로 고정**했고(pgNotifyEmail), 고객 영수증은
+  //    아래 "결제 알림 이메일" 목록으로 우리 서버가 보낸다. docs/ops/billing-emails.md
   // 이니시스는 휴대폰번호도 필수다. 하이픈은 넣어도 되지만 우리가 지워서 보낸다.
   const [phone, setPhone] = useState("");
   // **이름도 필수다** (PC·모바일 공통). 세션에 있으면 채우되, 없으면 사람이 넣는다 —
@@ -168,7 +168,6 @@ export default function CreditsPage() {
       const b = nextCard.buyer;
       if (b) {
         if (b.fullName) setBuyerName((cur) => cur.trim() ? cur : b.fullName);
-        if (b.email) setEmail((cur) => cur.trim() ? cur : b.email);
         if (b.phoneNumber) setPhone((cur) => cur.trim() ? cur : b.phoneNumber);
       }
     } catch {
@@ -192,12 +191,10 @@ export default function CreditsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (session.user.email) setEmail(session.user.email); }, [session.user.email]);
   useEffect(() => { if (session.user.name) setBuyerName(session.user.name); }, [session.user.name]);
 
   const price = state?.priceKrw ?? null;
 
-  const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
   const phoneDigits = phone.replace(/\D/g, "");
   // ⚠️ **휴대폰만 허용한다**(유선·대표번호 불가). 서버 검증(billing-card.ts)은 10~11자리만
   // 보므로 02·070 도 통과하지만, 화면은 일부러 더 좁게 잡는다: 빌링키 **결제** 때 이니시스가
@@ -207,9 +204,18 @@ export default function CreditsPage() {
   // 그래서 입력칸·오류 문구도 "휴대폰번호" 라고 분명히 말한다(설명 없는 거절 금지).
   const phoneOk = /^01\d{8,9}$/.test(phoneDigits);
   const nameOk = buyerName.trim().length >= 2;
-  // KG이니시스 PC 일반결제 필수 3종: fullName · email · phoneNumber (공식 문서 확인, 2026-08-11).
-  // 모바일은 email·phone 이 선택이지만, 어느 기기로 열든 되게 셋 다 받는다.
-  const canPay = emailOk && phoneOk && nameOk;
+  /**
+   * **이메일은 사람에게 안 받는다** (2026-09-14 사용자 결정).
+   *
+   * PG 로 가는 `customer.email` 은 이니시스가 **자기 결제완료 메일**을 보내는 주소다.
+   * 거기에 소비자 주소를 넣으면 한 결제에 메일이 두 통 간다 — 이니시스 것(우리가 문구를
+   * 통제 못 함)과 우리 영수증. 그래서 그 자리는 **우리 주소**로 고정했고(`pgNotifyEmail`),
+   * 소비자 인보이스는 우리 서버가 보낸다. 받을 사람은 아래 **"결제 알림 이메일"** 목록에서
+   * 관리한다 — 이름이 비슷해 헷갈리던 그 둘이 이제 하나만 남았다.
+   *
+   * 배선 전체: `docs/ops/billing-emails.md`
+   */
+  const canPay = phoneOk && nameOk;
 
   const close = () => setDialog(null);
   const recent = state?.ledger.slice(0, 5) ?? [];
@@ -234,8 +240,8 @@ export default function CreditsPage() {
   // 사용자는 준비가 끝난 줄 알고 카드 등록을 눌렀다가 400 을 봤다(2026-08-26).
   // 셋이 다 유효할 때만 요약을 보여주고, 아니면 무엇이 빠졌는지 말한다.
   const buyerSummary = canPay
-    ? [buyerName.trim(), email.trim(), phoneDigits].join(" · ")
-    : `미입력 (${[!nameOk && "이름", !emailOk && "이메일", !phoneOk && "휴대폰번호"].filter(Boolean).join(" · ")} 필요)`;
+    ? [buyerName.trim(), phoneDigits].join(" · ")
+    : `미입력 (${[!nameOk && "이름", !phoneOk && "휴대폰번호"].filter(Boolean).join(" · ")} 필요)`;
 
   /** 결제 알림 수신자 저장 — 쉼표·공백 구분 입력을 목록으로. 빈 입력 = 알림 없음. */
   async function saveNotify() {
@@ -715,14 +721,6 @@ export default function CreditsPage() {
                 aria-label="구매자 이름"
               />
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="영수증 받을 이메일 (필수)"
-                className={PILL_INPUT}
-                aria-label="구매자 이메일"
-              />
-              <input
                 type="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
@@ -735,9 +733,7 @@ export default function CreditsPage() {
                 <p className="text-[10.5px] text-rose-600 dark:text-rose-400">
                   {!nameOk
                     ? "구매자 이름을 입력하세요."
-                    : !emailOk
-                      ? "이메일 형식을 확인하세요."
-                      : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
+                    : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
                 </p>
               )}
               {/* ⚠️ **동의 시점의 고지.** 자동 재결제는 고정 정책이라 등록하는 순간 켜진다 —
@@ -760,7 +756,7 @@ export default function CreditsPage() {
           )}
           <SavedCardManager
             canManage={canManageBilling}
-            buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
+            buyer={{ fullName: buyerName.trim(), phoneNumber: phoneDigits }}
             buyerReady={canPay}
             card={card}
             loadFailed={cardLoadFailed}
@@ -795,16 +791,6 @@ export default function CreditsPage() {
               aria-label="구매자 이름"
             />
           </SettingField>
-          <SettingField label="영수증 받을 이메일">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="영수증 받을 이메일 (필수)"
-              className={PILL_INPUT}
-              aria-label="구매자 이메일"
-            />
-          </SettingField>
           <SettingField label="휴대폰번호">
             <input
               type="tel"
@@ -815,13 +801,11 @@ export default function CreditsPage() {
               aria-label="구매자 휴대폰번호"
             />
           </SettingField>
-          {(buyerName || email || phone) && !canPay && (
+          {(buyerName || phone) && !canPay && (
             <p className="text-[10.5px] text-rose-600 dark:text-rose-400">
               {!nameOk
                 ? "구매자 이름을 입력하세요."
-                : !emailOk
-                  ? "이메일 형식을 확인하세요."
-                  : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
+                : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
             </p>
           )}
           <p className="text-[11px] text-[var(--color-text-muted)]">

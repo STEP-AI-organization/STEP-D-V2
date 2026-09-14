@@ -59,15 +59,42 @@ export type CustomerCheck =
   | { ok: true; customer: CustomerInfo }
   | { ok: false; missing: string[]; message: string };
 
+/**
+ * **PG 로 보내는 알림 수신 주소 — 우리 것이다. 소비자 주소가 아니다.**
+ *
+ * KG이니시스는 결제 요청의 `customer.email` 로 **자기 결제완료 메일**을 보낸다. 예전엔
+ * 거기에 카드 등록자가 입력한 주소를 실었더니, 한 결제에 메일이 두 통 갔다 —
+ * 이니시스 것(우리가 문구를 통제 못 함)과 우리 영수증(`invoice-email.ts`).
+ *
+ * 역할을 갈랐다(사용자 결정 2026-09-14):
+ *   · 이니시스 메일 → **우리 확인용**. 판매자인 우리가 받는다
+ *   · 소비자 인보이스 → **우리 서버가** 보낸다 (결제 알림 이메일 목록 · `/credits` 에서 등록)
+ *
+ * 그래서 이 값은 **부르는 쪽이 정하지 않는다.** `customer.email` 로 무엇이 넘어오든
+ * 여기서 우리 주소로 덮는다 — 이미 등록된 옛 카드(구매자 주소가 저장돼 있다)까지
+ * 한 번에 덮이는 유일한 자리다.
+ *
+ * 자세한 배선: `docs/ops/billing-emails.md`
+ */
+export function pgNotifyEmail(): string {
+  return (process.env.PG_NOTIFY_EMAIL ?? "").trim() || "contact@stepai.kr";
+}
+
 /** 숫자만 남긴다. `010-1234-5678` 처럼 오는 걸 그대로 보내면 PG 가 거절한다. */
 export function normalizePhone(v: unknown): string {
   return String(v ?? "").replace(/\D/g, "");
 }
 
 /**
- * KG이니시스 PC 빌링키 발급에 필요한 고객 정보를 **미리** 검사한다.
- * 셋 중 하나라도 없으면 결제창을 띄우지 않는다 — 띄워 봐야 PG 가 거절하고,
- * 그 오류 문구는 사용자가 뭘 채워야 하는지 알려주지 않는다.
+ * KG이니시스 빌링키 발급·결제에 필요한 고객 정보를 **미리** 검사한다.
+ * 없으면 요청을 보내지 않는다 — 보내 봐야 PG 가 거절하고, 그 오류 문구는 사용자가
+ * 뭘 채워야 하는지 알려주지 않는다.
+ *
+ * ⚠️ **이메일은 사람에게 안 받는다** (2026-09-14 사용자 결정). PG 로 가는 `customer.email`
+ * 은 **우리 주소**이고(이니시스 완료 메일을 판매자인 우리가 받는다 · `pgNotifyEmail`),
+ * 소비자 인보이스는 우리 서버가 결제 알림 목록으로 보낸다. 그래서 여기서 검사하는 건
+ * **이름·휴대폰 둘뿐**이다 — 화면에도 그 둘만 묻는다.
+ * 배선 전체: `docs/ops/billing-emails.md`
  */
 export function checkCustomer(input: {
   fullName?: unknown;
@@ -75,11 +102,9 @@ export function checkCustomer(input: {
   phoneNumber?: unknown;
 }): CustomerCheck {
   const fullName = String(input.fullName ?? "").trim();
-  const email = String(input.email ?? "").trim();
   const phoneNumber = normalizePhone(input.phoneNumber);
   const missing: string[] = [];
   if (!fullName) missing.push("이름");
-  if (!email || !/^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(email)) missing.push("이메일");
   // 국내 휴대폰은 10~11자리. 너무 짧으면 오타다.
   if (phoneNumber.length < 10 || phoneNumber.length > 11) missing.push("휴대폰번호");
   if (missing.length) {
@@ -89,7 +114,9 @@ export function checkCustomer(input: {
       message: `카드 등록에 ${missing.join(" · ")}가 필요합니다 (KG이니시스 필수 입력).`,
     };
   }
-  return { ok: true, customer: { fullName, email, phoneNumber } };
+  // 이메일은 입력값이 아니라 **우리 주소**다 — PG 경계(portone.ts)가 어차피 덮지만,
+  // 여기서도 같은 값을 넣어 저장분(billing_card.buyer_email)이 거짓말하지 않게 한다.
+  return { ok: true, customer: { fullName, email: pgNotifyEmail(), phoneNumber } };
 }
 
 /**
