@@ -115,3 +115,55 @@ describe("충전은 자동이다 — 수동 경로는 의도적으로 안 쓴다
       "수동 충전 라우트를 지웠다 — 정책을 되돌리려면 서버부터 다시 만들어야 한다");
   });
 });
+
+/**
+ * **카드사가 요구하는 값을 선택으로 두지 않는다.**
+ *
+ * 2026-09-14 실측: 제품 폼이 생년월일/사업자번호와 카드 비밀번호 앞 2자리를
+ * `<details>` 안에 "추가 카드 확인정보 (필요한 경우)" 로 접어 두고 선택 입력으로 뒀는데,
+ * 실제로는 카드사가 **둘 다 요구해서** 비우면 발급이 거절됐다.
+ *
+ * 선택처럼 보이는 필수는 사용자를 실패로 안내한다 — 그리고 그 실패는
+ * `card_issue_failed` 라는 뭉뚱그린 문구로 돌아와서 무엇을 빠뜨렸는지도 안 알려 준다.
+ *
+ * 서버는 여전히 optional 로 받는다(`checkCardCredential`). 값이 있으면 형식만 본다 —
+ * 카드사 정책은 바뀔 수 있고, 서버가 정책을 흉내 내면 정책이 바뀔 때 서버를 고쳐야 한다.
+ * **입력을 강제하는 자리는 폼이다.**
+ */
+describe("카드 확인정보는 폼에서 필수다", () => {
+  const FORM = read(REPO, "apps", "web", "src", "components", "billing", "card-registration-form.tsx");
+
+  it("생년월일/사업자번호와 비밀번호 앞 2자리에 required 가 걸려 있다", () => {
+    for (const name of ["identity", "password"]) {
+      const at = FORM.indexOf(`name="${name}"`);
+      assert.ok(at > 0, `제품 폼에 ${name} 입력이 없다`);
+      // 같은 <input ...> 태그 안에 required 가 있어야 한다.
+      const tag = FORM.slice(at, FORM.indexOf("/>", at));
+      assert.match(tag, /\brequired\b/, `${name} 이 선택 입력이다 — 비우면 카드사가 발급을 거절한다`);
+    }
+  });
+
+  it("**접어서 숨기지 않는다** — 선택처럼 보이면 사람은 건너뛴다", () => {
+    // 주석을 빼고 본다 — 이 파일 주석에 "예전엔 <details> 안에 있었다" 는 이력이 적혀 있어서,
+    // 그대로 훑으면 **이력을 적었다는 이유로** 빨개진다(실제로 그랬다).
+    const code = FORM
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")   // JSX 주석
+      .replace(/\/\*[\s\S]*?\*\//g, "")       // 블록 주석
+      .replace(/^\s*\/\/.*$/gm, "");          // 줄 주석
+    assert.ok(!code.includes("<details"),
+      "확인정보를 details 로 접어 뒀다 — 필수인데 '필요한 경우' 로 읽힌다");
+  });
+
+  it("조건부로 빼고 보내지 않는다 — required 인데 빠지면 그 자체가 모순이다", () => {
+    assert.ok(!/\.\.\.\(read\("identity"\)/.test(FORM) && !/\.\.\.\(read\("password"\)/.test(FORM),
+      "값이 있을 때만 보내는 조건부 전달이 남아 있다");
+    assert.match(FORM, /birthOrBusinessRegistrationNumber: read\("identity"\)/);
+    assert.match(FORM, /passwordTwoDigits: read\("password"\)/);
+  });
+
+  it("서버는 계속 optional 이다 — 카드사 정책을 서버가 흉내 내지 않는다", () => {
+    // 있으면 형식만 검사하고, 없다고 거절하지는 않는다. 정책이 바뀌면 폼만 고치면 된다.
+    assert.match(CREDENTIAL, /if \(identity && !/);
+    assert.match(CREDENTIAL, /if \(password && !/);
+  });
+});

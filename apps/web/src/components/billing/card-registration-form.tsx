@@ -49,8 +49,10 @@ export function CardRegistrationForm({ busy, buyerReady, replacing, onRegister, 
         number: read("number"),
         expiryMonth: read("expiryMonth"),
         expiryYear: read("expiryYear"),
-        ...(read("identity") ? { birthOrBusinessRegistrationNumber: read("identity") } : {}),
-        ...(read("password") ? { passwordTwoDigits: read("password") } : {}),
+        // 둘 다 required 라 브라우저가 빈 값으로는 제출을 막는다 — 조건부로 넣지 않는다.
+        // (예전엔 선택이라 빠뜨린 채 제출됐고, 그러면 카드사가 발급을 거절했다.)
+        birthOrBusinessRegistrationNumber: read("identity"),
+        passwordTwoDigits: read("password"),
       });
     } finally {
       form.reset();
@@ -81,22 +83,24 @@ export function CardRegistrationForm({ busy, buyerReady, replacing, onRegister, 
               pattern="[0-9]{2}" placeholder="YY" className={INPUT} />
           </label>
         </div>
-        <details className="rounded-xl border border-[var(--color-border-subtle)] p-3 text-xs text-[var(--color-text-muted)]">
-          <summary className="cursor-pointer text-[var(--color-text-primary)]">추가 카드 확인정보 (필요한 경우)</summary>
-          <p className="mt-2 leading-relaxed">카드사에서 요구하는 경우 입력해 주세요. 법인카드는 사업자등록번호, 개인·개인명의 법인카드는 생년월일을 입력합니다.</p>
-          <div className="mt-3 flex flex-col gap-3">
-            <label className="text-xs text-[var(--color-text-primary)]">
-              사업자등록번호 또는 생년월일
-              <input name="identity" inputMode="numeric" maxLength={10} pattern="[0-9]{6}|[0-9]{10}"
-                placeholder="사업자번호 10자리 / 생년월일 6자리" className={INPUT} />
-            </label>
-            <label className="text-xs text-[var(--color-text-primary)]">
-              카드 비밀번호 앞 2자리
-              <input name="password" type="password" inputMode="numeric" autoComplete="new-password"
-                maxLength={2} pattern="[0-9]{2}" placeholder="앞 2자리" className={INPUT} />
-            </label>
-          </div>
-        </details>
+        {/*
+          ⚠️ **접어 두지 않는다.** 예전엔 `<details>` 안에 "추가 카드 확인정보 (필요한 경우)"
+          로 숨겨 두고 선택 입력이었는데, 실제로는 **카드사가 둘 다 요구해서** 비우면 발급이
+          거절된다(2026-09-14 실측). 선택처럼 보이는 필수는 사용자를 실패로 안내하는 것이다.
+        */}
+        <label className="text-xs text-[var(--color-text-primary)]">
+          사업자등록번호 또는 생년월일
+          <input name="identity" inputMode="numeric" required maxLength={10} pattern="[0-9]{6}|[0-9]{10}"
+            placeholder="사업자번호 10자리 / 생년월일 6자리" className={INPUT} />
+          <span className="mt-1 block text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+            법인카드는 사업자등록번호 10자리, 개인·개인명의 법인카드는 생년월일 6자리입니다.
+          </span>
+        </label>
+        <label className="text-xs text-[var(--color-text-primary)]">
+          카드 비밀번호 앞 2자리
+          <input name="password" type="password" inputMode="numeric" autoComplete="new-password"
+            required maxLength={2} pattern="[0-9]{2}" placeholder="앞 2자리" className={INPUT} />
+        </label>
         <label className="flex items-start gap-2 text-xs leading-relaxed text-[var(--color-text-primary)]">
           <input type="checkbox" required name="consent" className="mt-0.5 size-4 shrink-0 accent-primary" />
           위 자동결제 금액과 조건을 확인했으며, 이 카드의 자동결제 등록에 동의합니다.
