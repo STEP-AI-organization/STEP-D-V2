@@ -266,7 +266,9 @@ import {
   deleteThread as chatDeleteThread, getThread as chatGetThread,
   listMessages as chatListMessages, listThreads as chatListThreads,
 } from "./chatbot/store.ts";
-import { buildReport, crosscheckFailures, toHtml } from "./report/index.ts";
+import { registerChatbotRoutes } from "./chatbot/routes.ts";
+import { registerReportRoutes } from "./report/routes.ts";
+import type { AppEnv } from "./app-env.ts";
 import { getReport, listReports } from "./report/store.ts";
 import { mailConfigured, sendMail } from "./mailer.ts";
 import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./pipeline/content-pipeline.ts";
@@ -465,7 +467,6 @@ initDb()
 console.log(`[stepd-server] storage mode: ${useGcs() ? "GCS" : "local"}`);
 
 /** 요청 스코프 변수. 미들웨어가 세션을 풀어 넣고, 라우트가 c.get("user") 로 읽는다. */
-type AppEnv = { Variables: { user?: User } };
 
 const app = new Hono<AppEnv>();
 app.use("*", logger());
@@ -6821,9 +6822,17 @@ app.delete("/api/assets", async (c) => {
 
 app.use("/api/billing/card/issue", bodyLimit({ maxSize: 4096 }));
 
-/** 자체 카드 입력창: 발급·저장을 서버에서 끝내고 빌링키를 브라우저에 보내지 않는다. */
+/**
+ * 자체 카드 입력창: 발급·저장을 서버에서 끝내고 빌링키를 브라우저에 보내지 않는다.
+ *
+ * ⚠️ 가드는 **`requireCardActor`** 다(`requireManager` 아님 · 2026-09-14 정정).
+ * 결제수단 등록 경로의 행위자 규칙은 "세션이면 매니저, API 키면 그 키" 로 이미 정해져
+ * 있고(2026-08-20 "고객사가 자기 도메인 화면에서 카드를 등록한다"), `/prepare` 와
+ * `POST /card` 는 그걸 따르는데 여기만 세션 전용이라 **고객사 콘솔은 새 입력창을 못 썼다**.
+ * 한 흐름의 세 라우트가 서로 다른 문을 쓰면 "준비는 되는데 발급이 403" 이 된다.
+ */
 app.post("/api/billing/card/issue", async (c) => {
-  const actor = requireManager(c).email;
+  const actor = requireCardActor(c);
   c.header("Cache-Control", "no-store");
   if (!c.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
     return c.json({ error: "json_required", message: "카드 등록 요청 형식이 올바르지 않습니다." }, 415);
@@ -13463,186 +13472,13 @@ app.delete("/api/harvest/sources/:id", async (c) => {
   });
 });
 
-// ── 챗봇 (업무 도우미) ────────────────────────────────────────────────────────
+// ── 챗봇(업무 도우미) · 보고 리포트 ────────────────────────────
 //
-// 세션이 있어야 한다(`requireUser`) — 챗봇은 **그 사람의 워크스페이스 상태**를 읽어 답하고,
-// 대화도 사람 단위로 남는다. API 키(회사 단위)로 열지 않는 이유가 그것이다.
-//
-// 스트리밍하지 않는다. 프로덕션 웹은 `/api/proxy` 를 거치므로 서버가 보내는 바이트가 그대로
-// 과금되는데(2026-08-31 하루 276GB 사고), 1~3초짜리 응답에 SSE 를 붙일 값이 없다.
-
-/**
- * 챗봇·리포트의 행위자.
- *
- * 세션이 있으면 그 사람이다. **없고 인증이 꺼져 있으면** 로컬 개발 자세이므로 기본
- * 워크스페이스의 공용 행위자로 돈다 — 이 리포의 다른 라우트 전부가 이미 그렇게 동작한다
- * (`resolveTenant` 3번 경로). 여기만 401 을 내면 로컬에서 챗봇만 안 뜨고, 그 이유를
- * 다음 사람이 한참 찾는다.
- *
- * 이 폴백이 안전한 근거는 챗봇에 있지 않다 — **기동 시 `assertAuthPosture()` 가
- * "테넌트 2개 이상 + 인증 꺼짐" 조합을 아예 서빙하지 않는다.** 프로덕션은 AUTH_REQUIRED=1
- * 이라 늘 진짜 세션이다. 그 전제가 깨지면 서버가 통째로 503 이 되지, 여기가 새지 않는다.
- */
-function chatbotActor(c: Context<AppEnv>): { id: string; tenantId: string; role: Role } {
-  const user = c.get("user");
-  if (user) return { id: user.id, tenantId: user.tenantId, role: user.role };
-  if (authRequired()) throw new HTTPException(401, { message: "login required" });
-  return { id: "local", tenantId: currentTenantId(), role: "owner" };
-}
-
-/** 챗봇 오류 → 상태 코드. 사유를 기계가 읽을 코드로도 준다(위 keyError 와 같은 이유). */
-function chatbotStatus(code: ChatbotError["code"]): 400 | 404 | 409 | 429 {
-  if (code === "rate_limited") return 429;
-  if (code === "thread_not_found") return 404;
-  if (code === "thread_full") return 409;
-  return 400;
-}
-
-app.post("/api/chatbot/message", async (c) => {
-  const user = chatbotActor(c);
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  try {
-    const out = await chatbotAsk({
-      user,
-      threadId: typeof body.threadId === "string" ? body.threadId : null,
-      message: String(body.message ?? ""),
-      screen: typeof body.screen === "string" ? body.screen : null,
-    });
-    return c.json(out);
-  } catch (e) {
-    if (e instanceof ChatbotError) return c.json({ error: e.code, message: e.message }, chatbotStatus(e.code));
-    throw e;
-  }
-});
-
-app.get("/api/chatbot/threads", async (c) => {
-  const user = chatbotActor(c);
-  return c.json({ threads: await chatListThreads(user) });
-});
-
-app.get("/api/chatbot/threads/:id", async (c) => {
-  const user = chatbotActor(c);
-  const thread = await chatGetThread(user, c.req.param("id"));
-  // 남의 대화와 없는 대화를 **같은 응답으로** 다룬다 — 존재 여부도 알려 주지 않는다.
-  if (!thread) return c.json({ error: "not_found", message: "대화를 찾을 수 없습니다." }, 404);
-  return c.json({ thread, messages: await chatListMessages(thread.id) });
-});
-
-app.delete("/api/chatbot/threads/:id", async (c) => {
-  const user = chatbotActor(c);
-  const ok = await chatDeleteThread(user, c.req.param("id"));
-  if (!ok) return c.json({ error: "not_found", message: "대화를 찾을 수 없습니다." }, 404);
-  return c.json({ ok: true });
-});
-
-// ── 보고 리포트 ───────────────────────────────────────────────────────────────
-
-/**
- * 보고서 초안 생성. 대화를 거치지 않고 바로 부를 수도 있다(화면의 "보고서 만들기" 버튼).
- * 숫자는 전부 집계가 낳고 모델은 문장만 쓴다 — support/report/index.ts 주석 참고.
- */
-app.post("/api/reports", async (c) => {
-  const user = chatbotActor(c);
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const request = String(body.request ?? "").trim();
-  if (!request) return c.json({ error: "request_required", message: "무엇을 뽑을지 적어 주세요." }, 400);
-  if (request.length > 500) return c.json({ error: "too_long", message: "요청이 너무 깁니다." }, 400);
-
-  const built = await buildReport(user, request, {
-    threadId: typeof body.threadId === "string" ? body.threadId : null,
-  });
-  // 응답에 `data`(집계 원본)를 싣지 않는다 — 표를 다시 그릴 일이 없고, 그대로 실으면
-  // 목록·재조회마다 수십 KB 가 프록시를 지난다. 필요하면 상세 조회에서 받는다.
-  return c.json({
-    reportId: built.reportId, spec: built.spec, markdown: built.markdown, warnings: built.warnings,
-  });
-});
-
-app.get("/api/reports", async (c) => {
-  const user = chatbotActor(c);
-  return c.json({ reports: await listReports(user) });
-});
-
-app.get("/api/reports/:id", async (c) => {
-  const user = chatbotActor(c);
-  const r = await getReport(user, c.req.param("id"));
-  if (!r) return c.json({ error: "not_found", message: "보고서를 찾을 수 없습니다." }, 404);
-  return c.json(r);
-});
-
-/**
- * 내보내기. **검산이 어긋난 보고서는 파일로 나가지 않는다.**
- *
- * 화면에서는 보인다(무엇이 어긋났는지 알아야 고친다). 막는 것은 첨부파일이 되는 경로다 —
- * 한 번 파일이 되면 그게 회의 자료가 되고, 그 안의 합계가 표와 다르면 아무도 눈치채지 못한다.
- */
-app.get("/api/reports/:id/export", async (c) => {
-  const user = chatbotActor(c);
-  const r = await getReport(user, c.req.param("id"));
-  if (!r) return c.json({ error: "not_found", message: "보고서를 찾을 수 없습니다." }, 404);
-
-  const data = r.data;
-  const failures = data?.crosscheck ? crosscheckFailures(data) : [];
-  if (failures.length) {
-    return c.json({
-      error: "crosscheck_failed",
-      message: `검산이 맞지 않아 내보낼 수 없습니다 — ${failures.join(" / ")}`,
-    }, 409);
-  }
-
-  const format = c.req.query("format") === "html" ? "html" : "md";
-  const stamp = `${r.spec?.from ?? ""}_${r.spec?.to ?? ""}`.replace(/[^0-9_-]/g, "");
-  // 파일 이름에 한글을 쓰면 브라우저·메일 클라이언트마다 깨진다. 제목은 문서 안에 있다.
-  const filename = `report_${stamp || r.id}.${format}`;
-  const body = format === "html"
-    ? toHtml(data, "", new Date(r.createdAt))
-    : r.markdown;
-
-  return new Response(body, {
-    headers: {
-      "content-type": format === "html" ? "text/html; charset=utf-8" : "text/markdown; charset=utf-8",
-      "content-disposition": `attachment; filename="${filename}"`,
-    },
-  });
-});
-
-/** 메일로 보내기. SMTP 가 설정돼 있을 때만 — 없으면 조용히 성공한 척하지 않는다. */
-app.post("/api/reports/:id/email", async (c) => {
-  const user = chatbotActor(c);
-  if (!mailConfigured()) {
-    return c.json({ error: "mail_not_configured", message: "메일 발송이 설정되지 않았습니다." }, 409);
-  }
-  const r = await getReport(user, c.req.param("id"));
-  if (!r) return c.json({ error: "not_found", message: "보고서를 찾을 수 없습니다." }, 404);
-
-  const data = r.data;
-  const failures = data?.crosscheck ? crosscheckFailures(data) : [];
-  if (failures.length) {
-    return c.json({
-      error: "crosscheck_failed",
-      message: `검산이 맞지 않아 보낼 수 없습니다 — ${failures.join(" / ")}`,
-    }, 409);
-  }
-
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const raw: unknown[] = Array.isArray(body.to) ? body.to : [];
-  const to = [...new Set(raw.map((v) => String(v).trim().toLowerCase()).filter(Boolean))];
-  if (!to.length) return c.json({ error: "to_required", message: "받는 사람이 필요합니다." }, 400);
-  if (to.length > 5) return c.json({ error: "too_many", message: "받는 사람은 5명까지입니다." }, 400);
-  const bad = to.find((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
-  if (bad) return c.json({ error: "invalid_email", message: `이메일 형식이 아닙니다: ${bad}` }, 400);
-
-  const html = toHtml(data, "", new Date(r.createdAt));
-  const subject = r.spec?.title ?? "보고서";
-  const sent: string[] = [];
-  for (const addr of to) {
-    // 한 명이 실패해도 나머지는 보낸다 — 전부 되돌리면 이미 간 메일과 어긋난다.
-    try { await sendMail({ to: addr, subject, html }); sent.push(addr); }
-    catch (e) { console.warn(`[support] 리포트 메일 실패 (${addr}):`, e); }
-  }
-  if (!sent.length) return c.json({ error: "send_failed", message: "메일을 보내지 못했습니다." }, 502);
-  return c.json({ ok: true, sent });
-});
+// 라우트 본문은 `chatbot/routes.ts` · `report/routes.ts` 로 옆겼다(2026-09-14 · 분할 1호).
+// 둘은 행위자 판정(`chatbot/actor.ts`)을 공유한다 — 세션이 없고 인증이 꺼진 로컬 자세에서
+// 기본 워크스페이스로 도는 그 폴백이라, 한 쪽만 고치면 둘이 갈라진다.
+registerChatbotRoutes(app);
+registerReportRoutes(app);
 
 // ── start ─────────────────────────────────────────────────────────────────────
 serve({ fetch: app.fetch, port: PORT }, (info) => {

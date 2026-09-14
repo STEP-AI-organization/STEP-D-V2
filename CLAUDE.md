@@ -66,12 +66,15 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~13,500줄, 라우트 283개**) + 별도 워커 프로세스 구조.
+Hono + 별도 워커 프로세스 구조. **라우트 283개** — `index.ts`(~13,500줄) 275개 +
+도메인 파일 9개(`chatbot/routes.ts` 4 · `report/routes.ts` 5). 도메인 이전 진행 중.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
 |------|------|
-| `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
+| `src/index.ts` | 조립부(미들웨어 순서·마운트) + 아직 안 옮긴 라우트. **Cloud Run은 잡을 큐잉만 한다.** |
+| `src/<도메인>/routes.ts` | 도메인별 라우트. `registerXRoutes(app)` 로 등록한다 (2026-09-14~ · 아래 "작업 규칙") |
+| `src/app-env.ts` | `AppEnv`·`AppHono` 타입. **아무것도 import 하지 않는다** — 라우트 파일과 index.ts 의 순환을 끊는 자리 |
 | `src/worker.ts` | **워커 프로세스 진입점.** 잡 28종 · 레인 7개 · drain 모드 (아래 참조) |
 | `src/pipeline/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/pipeline/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
@@ -347,7 +350,19 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 - **배포는 명시적 요청 시에만.** "ㄱㄱ", "배포해줘" 없이 Cloud Build 실행 금지.
   (머지 ≠ 배포다. 웹만 `main` 푸시로 자동 배포된다.)
 - **`.env*`, `gcp-keys/` 절대 커밋 금지.** (2026-07-14 개인키 공개 리포 유출 사고 — 커밋 전 `git status` 확인)
-- 서버 라우트는 `apps/server/src/index.ts` 한 파일에 유지 — 분리하지 말 것.
+- **서버 라우트는 도메인별 `src/<도메인>/routes.ts` 로 옮기는 중이다** (2026-09-14 방침 전환).
+  그전 규칙은 "`index.ts` 한 파일에 유지 — 분리하지 말 것" 이었다. 13,500줄·라우트 283개가
+  되면서 사람이 못 찾겠다는 판단으로 뒤집었다. 옮길 때 지킬 것 셋:
+  - **`registerXRoutes(app)` 함수로 등록한다.** `app.route()` 서브앱 금지 — 그러면 경로가
+    상대경로가 되는데, 소스 스캔 테스트 **59곳**이 `app.post("/api/superadmin/tenants/:id/api-keys"`
+    같은 **전체 경로 문자열**을 grep 한다(`src/app-env.ts` 주석).
+  - **스캔 범위를 같이 넓힌다.** 옮기면 `index.ts` 만 읽던 검사가 **0건을 스캔하고 조용히
+    초록**이 된다. `tests/sources.ts` 의 `routeSource()` 를 쓸 것. 라우트 총개수를 세는
+    `docs-drift` 가 전 범위를 보고 있어, 빠뜨리면 거기서 먼저 빨개진다.
+  - **등록됐는지는 e2e 로 증명한다.** 소스 스캔은 "파일에 라우트가 있다" 만 본다 —
+    `registerXRoutes(app)` 호출을 깜빡해도 전부 초록인 채 404 가 난다(`api.e2e.ts` 의
+    "도메인 폴더로 옮긴 라우트가 등록돼 있다").
+  - 미들웨어 순서(테넌트 → 인증 → 압축)는 **`index.ts` 에 그대로 둔다.** 라우트만 옮긴다.
 - 프론트 API 함수 추가: `apps/web/src/lib/data/api.ts`에 타입 + 함수 함께.
 - 새 화면 추가: `src/app/(app)/<route>/page.tsx` + `src/lib/nav.ts`의 `NAV` 배열에 항목 추가.
 - 핵심 AI 파이프라인 코드는 `core/`에 (파이썬). 서버에서는 content-pipeline.ts로만 접점 유지.

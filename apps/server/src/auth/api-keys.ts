@@ -239,6 +239,13 @@ export const API_KEY_ROUTES: RouteRule[] = [
   // 빌링키만 받는다. 아래 셋 외의 결제 경로는 전부 세션 전용으로 남는다 —
   // 제거(DELETE)·충전(topup)·자동충전 한도(auto-topup)는 여기 없다. 의도적이다.
   { method: "POST", path: /^\/api\/billing\/card\/prepare$/, scope: "billing:write" },
+  // 자체 입력창(비인증결제) — 카드정보를 받아 **서버가** 빌링키를 발급하고 저장까지 끝낸다.
+  // 빌링키는 브라우저로 안 나간다.
+  // ⚠️ 이걸 열면 **부르는 쪽 서버가 카드데이터 경로에 들어온다**(PCI DSS 범위). 결제창(SDK)
+  //    경로는 카드번호가 브라우저→포트원으로 직행해 그 범위가 아니었다. 여는 이유는 UX 하나다
+  //    (낯선 결제창에서 헤매지 않게 · 2026-09-11 결정). 되돌리려면 이 줄을 지우고 호출부를
+  //    SDK 경로(`/prepare` + `POST /card`)로 되돌리면 된다 — 그 경로는 계속 살아 있다.
+  { method: "POST", path: /^\/api\/billing\/card\/issue$/, scope: "billing:write" },
   { method: "POST", path: /^\/api\/billing\/card$/, scope: "billing:write" },
   { method: "GET", path: /^\/api\/billing\/card$/, scope: "billing:read" },
   // 자동 충전 — 카드를 등록해 두면 잔액이 말라 라인이 서지 않게 한다(2026-08-21).
