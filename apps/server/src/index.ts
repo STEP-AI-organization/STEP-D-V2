@@ -10541,6 +10541,42 @@ async function serializeRenderPlan(
  * 것만** 주는 좁은 읽기 경로를 연다 — 줄(글자·색)과 그릴 위치뿐이라 수백 바이트다.
  * 콘솔의 실시간 미리보기가 실렌더와 같은 그림을 그리려면 `titleY`·글꼴·강조색이 같이 와야 한다.
  */
+/**
+ * 이 클립에 쓸 수 있는 **제목 후보** — 분석이 만들어 둔 것(기본 1 + 대안 N).
+ *
+ * ## 왜 클립이 아니라 추천에서 읽나
+ * 후보는 `recommendation.titleAlts` 에 산다. 클립에는 **없다** — 실측(2026-09-15) 결과
+ * 대기 클립 35건 중 `titleAlts` 를 가진 건 **0건**이고 필드 자체가 없다. 그래서 콘솔이
+ * `clip.titleAlts` 를 읽던 자리는 **한 번도 뜬 적이 없었다**(늘 빈 배열).
+ * 클립은 `sourceRecommendationId` 로 자기 추천을 가리키므로 거기서 당겨 온다.
+ *
+ * 순서는 **기본이 1순위**다(분석이 고른 것). 대안은 만들어진 순서대로 뒤에 붙는다 —
+ * 점수가 따로 없으므로 순위를 지어내지 않는다.
+ */
+async function titleChoicesFor(clip: any): Promise<{ titleLine1: string; titleLine2: string }[]> {
+  const recId = String(clip?.sourceRecommendationId ?? "").trim();
+  if (!recId) return [];
+  const rec = await getEntity<any>("recommendation", recId).catch(() => null);
+  if (!rec) return [];
+  const norm = (a: unknown, b: unknown) => ({
+    titleLine1: String(a ?? "").trim(),
+    titleLine2: String(b ?? "").trim(),
+  });
+  const out = [norm(rec.titleLine1, rec.titleLine2)];
+  for (const alt of Array.isArray(rec.titleAlts) ? rec.titleAlts : []) {
+    out.push(norm((alt as any)?.titleLine1, (alt as any)?.titleLine2));
+  }
+  // 빈 것·중복은 버린다 — 같은 문구가 두 번 뜨면 사람이 "뭐가 다르지" 를 찾느라 멈춘다.
+  const seen = new Set<string>();
+  return out.filter((t) => {
+    const k = `${t.titleLine1} ${t.titleLine2}`;
+    if (!t.titleLine1 && !t.titleLine2) return false;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 app.get("/api/clips/:id/overlay-title", async (c) => {
   const clip = await getEntity<any>("clip", c.req.param("id"));
   if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
@@ -10548,6 +10584,8 @@ app.get("/api/clips/:id/overlay-title", async (c) => {
   const lines = Array.isArray(es.titleLines) ? (es.titleLines as Record<string, unknown>[]) : [];
   return c.json({
     ok: true,
+    /** 제목 후보 — 기본이 1순위, 대안이 뒤(§titleChoicesFor). */
+    titleChoices: await titleChoicesFor(clip),
     titleLines: lines.map((l) => ({
       id: String(l?.id ?? ""),
       text: String(l?.text ?? ""),
@@ -10607,6 +10645,23 @@ app.get("/api/clips/:id/overlay-title", async (c) => {
       titleSpacing: typeof es.titleSpacing === "number" ? es.titleSpacing : null,
       titleLineHeight: typeof es.titleLineHeight === "number" ? es.titleLineHeight : null,
       subtitleSpacing: typeof es.captionSpacing === "number" ? es.captionSpacing : null,
+      // 제목·자막 스타일 상세(2026-09-15 · 확인·수정 팝업의 클립별 예외 수정) — 전부
+      // 규칙 layout 과 같은 어휘. null = 이 클립엔 값 없음(템플릿 기본을 따른다는 뜻).
+      titleShadow: es.titleShadow === false ? false : null,
+      subtitleShadow: es.captionShadow === false ? false : null,
+      subtitleShadowX: typeof es.captionShadowX === "number" ? es.captionShadowX : null,
+      subtitleShadowY: typeof es.captionShadowY === "number" ? es.captionShadowY : null,
+      subtitleStroke: es.captionStroke === false ? false : null,
+      subtitleStrokeColor: typeof es.captionStrokeColor === "string" ? es.captionStrokeColor : null,
+      subtitleBg: es.captionBg === true ? true : null,
+      subtitleBgColor: typeof es.captionBgColor === "string" ? es.captionBgColor : null,
+      subtitleBgOpacity: typeof es.captionBgOpacity === "number" ? es.captionBgOpacity : null,
+      timeboxFont: typeof es.channelBoxFont === "string" ? es.channelBoxFont : null,
+      timeboxSize: typeof es.channelBoxScale === "number" ? Math.round(es.channelBoxScale * 100) : null,
+      // 제목 글꼴은 **줄 단위**(titleLines[].font)다 — 화면 어휘로는 첫 줄 값을 대표로 준다.
+      // PATCH 의 layout.titleFont 는 모든 줄에 적용된다(buildOverlayDraft).
+      titleFont: typeof (lines[0] as { font?: unknown } | undefined)?.font === "string"
+        ? String((lines[0] as { font: string }).font) : null,
     },
   });
 });
@@ -10733,6 +10788,31 @@ function buildOverlayDraft(clip: any, b: { lines?: unknown; layout?: unknown }):
     put("titleSpacing", num(lay.titleSpacing, 200));
     put("titleLineHeight", num(lay.titleLineHeight, 3));
     put("captionSpacing", num(lay.subtitleSpacing, 200));
+    // ── 스타일 상세 (2026-09-15 · 확인·수정 팝업을 템플릿 설정과 같은 깊이로) ────
+    // 규칙 layout 과 같은 어휘 → factory 매핑과 같은 es 키. 렌더 소비처는 이미 있다
+    // (buildStaticOverlayItems·captionAssStyle·BoxLabel — 템플릿 확장 때 배선).
+    if (lay.titleShadow === false) esPatch.titleShadow = false;
+    else if (lay.titleShadow === true) esPatch.titleShadow = undefined as never; // 켬 = 필드 제거 대신 기본값
+    if (lay.subtitleShadow === false) esPatch.captionShadow = false;
+    put("captionShadowX", num(lay.subtitleShadowX, 50));
+    put("captionShadowY", num(lay.subtitleShadowY, 50));
+    if (lay.subtitleStroke === false) esPatch.captionStroke = false;
+    if (hex6(lay.subtitleStrokeColor)) esPatch.captionStrokeColor = hex6(lay.subtitleStrokeColor);
+    if (lay.subtitleBg === true) esPatch.captionBg = true;
+    else if (lay.subtitleBg === false) esPatch.captionBg = false;
+    if (hex6(lay.subtitleBgColor)) esPatch.captionBgColor = hex6(lay.subtitleBgColor);
+    put("captionBgOpacity", num(lay.subtitleBgOpacity, 100));
+    if (FONT_FAMILIES.some((f) => f.id === String(lay.timeboxFont ?? ""))) {
+      esPatch.channelBoxFont = String(lay.timeboxFont);
+    }
+    if (hex6(lay.timeboxColor)) esPatch.channelBoxColor = hex6(lay.timeboxColor);
+    if (Number.isFinite(lay.timeboxSize)) {
+      esPatch.channelBoxScale = Math.min(2, Math.max(0.5, Number(lay.timeboxSize) / 100));
+    }
+    // 제목 글꼴 — 줄 단위 저장 모델이라 **모든 줄에** 적용한다(카탈로그 id 만).
+    if (FONT_FAMILIES.some((f) => f.id === String(lay.titleFont ?? ""))) {
+      for (const l of nextLines) (l as Record<string, unknown>).font = String(lay.titleFont);
+    }
   }
 
   return { nextLines, esPatch };
