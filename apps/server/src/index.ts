@@ -10531,15 +10531,17 @@ app.get("/api/clips/:id/overlay-title", async (c) => {
   });
 });
 
-app.patch("/api/clips/:id/overlay-title", async (c) => {
-  const clipId = c.req.param("id");
-  const clip = await getEntity<any>("clip", clipId);
-  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
-
-  const b = await c.req.json<{ lines?: unknown }>().catch(() => null);
-  if (!b || !Array.isArray(b.lines)) {
-    return c.json({ error: "bad_request", message: "lines 배열이 필요합니다." }, 400);
-  }
+/**
+ * 요청 본문(`lines`·`layout`) → 저장할 editorState 조각.
+ *
+ * **저장(PATCH)과 미리보기(POST …/overlay-preview)가 이 함수를 같이 쓴다.** 두 벌로 만들면
+ * "화면에 보이는 것" 과 "실제로 저장·렌더되는 것" 이 갈라지고, 그게 이 화면에서 제일 하면
+ * 안 되는 일이다(사용자 2026-09-15: "미리보기랑 실제 렌더된 영상 괴리가 있으면 안 된다").
+ */
+function buildOverlayDraft(clip: any, b: { lines?: unknown; layout?: unknown }): {
+  nextLines: Record<string, unknown>[];
+  esPatch: Record<string, unknown>;
+} {
   // 줄은 **두 가지 모양**을 받는다: `"글자"` 와 `{ text, color }`.
   // 색을 고칠 수 있어야 한다는 요구(2026-09-14)가 나중에 붙었는데, 기존 호출부가 문자열
   // 배열을 보내고 있어 모양을 갈아치우면 그쪽이 조용히 깨진다. 둘 다 받는다.
@@ -10553,7 +10555,7 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
   const num = (v: unknown, max: number) =>
     (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.min(v, max) : null);
 
-  const parsed = b.lines.map((raw) => {
+  const parsed = (Array.isArray(b.lines) ? b.lines : []).map((raw) => {
     const o = (raw && typeof raw === "object") ? raw as Record<string, unknown> : null;
     const text = String((o ? o.text : raw) ?? "").trim();
     const st = o?.stroke as Record<string, unknown> | null | undefined;
@@ -10652,6 +10654,80 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
     put("titleLineHeight", num(lay.titleLineHeight, 3));
     put("captionSpacing", num(lay.subtitleSpacing, 200));
   }
+
+  return { nextLines, esPatch };
+}
+
+/**
+ * **미리보기 기하** — 콘솔이 실렌더와 같은 그림을 그리도록 서버가 숫자를 계산해 준다.
+ * 저장하지 않는다(읽기 전용).
+ *
+ * ## 왜 클라이언트가 계산하면 안 되나 (사용자 2026-09-15)
+ * > "미리보기랑 실제 렌더된 영상 괴리가 있으면 안 된다는 것이 핵심"
+ *
+ * 제목 배치에는 콘솔이 알 수 없는 규칙이 겹겹이 있다 — 블록 폭(`TITLE_BLOCK` 0.86 − 패딩),
+ * **넘치면 접는 대신 폰트를 줄이는** shrink-to-fit, 자간을 더한 폭 측정, 줄 간격이 CSS
+ * line-height 가 아니라 `round(fitPx × 행간)` 의 **절대 누적**이라는 것, 그리고 저장 좌표가
+ * 스테이지 px 인지 출력 px 인지(`coordBasis`). 콘솔이 이걸 베껴 두면 **렌더가 바뀔 때마다
+ * 조용히 갈라진다** — 갈라진 걸 아무도 못 본다.
+ *
+ * 그래서 렌더가 쓰는 **바로 그 함수**(`normalizeEditorCoords` → `layoutTitleLines`)를 태워
+ * 결과 숫자만 내려준다. 초안 파싱도 저장과 **같은 함수**(`buildOverlayDraft`)를 쓴다 —
+ * 보이는 것과 저장되는 것이 같아야 한다.
+ *
+ * 단위는 **출력 px**(W×H)다. 콘솔은 자기 미리보기 상자 크기로 나누기만 하면 된다.
+ */
+app.post("/api/clips/:id/overlay-preview", async (c) => {
+  const clip = await getEntity<any>("clip", c.req.param("id"));
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+  const b = await c.req.json<{ lines?: unknown; layout?: unknown }>().catch(() => ({}));
+  const { nextLines, esPatch } = buildOverlayDraft(clip, b ?? {});
+
+  const es0 = { ...(clip.editorState ?? {}), ...esPatch, titleLines: nextLines };
+  // 배치가 W/H/스테이지 기준을 정한다 — 초안에서 배치를 바꿨으면 **그 배치로** 계산해야
+  // 미리보기가 저장 후와 같아진다.
+  const aspect = String(esPatch.aspect ?? (clip.editorState as any)?.aspect ?? clip.aspectRatio ?? "");
+  const { W, H, stageH } = renderDims(aspect);
+  const scale = H / stageH;
+  // ⚠️ 정규화를 거쳐야 한다 — 저장 모델이 스테이지 px 일 수 있고, layoutTitleLines 는
+  //    `t.size` 를 **출력 px 로 전제**한다. 이 한 줄을 빼면 미리보기만 3배 작아진다.
+  const es = normalizeEditorCoords(es0, aspect);
+
+  return c.json({
+    ok: true,
+    W, H,
+    lines: layoutTitleLines(es, W, H, scale).map((L) => ({
+      text: L.text,
+      color: L.colorHex,
+      align: L.align,
+      /** 글자 크기(출력 px) — **shrink-to-fit 이 적용된 최종값**이다. */
+      fontPx: L.fitPx,
+      /** 줄 상단 y(출력 px) — 행간이 이미 누적돼 있다. CSS line-height 로 재현하지 말 것. */
+      topPx: L.by,
+      /** 앵커 x(출력 px). align 에 따라 좌/중앙/우 기준점. */
+      anchorPx: L.bx,
+      spacingPx: L.spacing,
+      font: typeof (L.t as any)?.font === "string" ? (L.t as any).font : "",
+      stroke: (L.t as any)?.stroke ?? null,
+      shadow: titleShadowOf(L.t, scale) ?? null,
+    })),
+  });
+});
+
+app.patch("/api/clips/:id/overlay-title", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+
+  const b = await c.req.json<{ lines?: unknown; layout?: unknown }>().catch(() => null);
+  if (!b || !Array.isArray(b.lines)) {
+    return c.json({ error: "bad_request", message: "lines 배열이 필요합니다." }, 400);
+  }
+  const { nextLines, esPatch } = buildOverlayDraft(clip, b);
+  if (nextLines.length === 0) {
+    return c.json({ error: "bad_request", message: "화면 문구가 비었습니다 — 최소 한 줄이 필요합니다." }, 400);
+  }
+  const es = (clip.editorState ?? {}) as Record<string, unknown>;
 
   await putEntity("clip", clipId, {
     ...clip,
