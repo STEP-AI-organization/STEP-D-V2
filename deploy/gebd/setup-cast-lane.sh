@@ -51,19 +51,25 @@ if [ ! -f /etc/stepd/worker.env ]; then
 fi
 
 # ── 1. cast 전용 venv ───────────────────────────────────────────────────────
-# ⚠️ requirements 핀(numpy==2.4.6 등)은 프로덕션 content 이미지(bookworm·python3.11)와
-# 같은 판이다. 이 VM(Ubuntu 22.04)의 기본 python3 은 3.10 이라 numpy 2.4 배포판이
-# 아예 없다(Requires-Python >=3.11 · 2026-09-15 설치 중 실측) → deadsnakes 로 3.11 을
-# 깔아 프로덕션과 파이썬 판을 맞춘다. 3.11 이 이미 있는 머신에선 PPA 를 건드리지 않는다.
+# ⚠️ 시스템 python3(잼미 3.10)엔 numpy 2.4 배포판이 아예 없다(Requires-Python >=3.11).
+# ⚠️ 그렇다고 **python3.11 을 깔면 안 된다** — jammy universe 의 python3.11 은
+#   **3.11.0rc1 프리릴리스**다(2026-09-15 실측). rc1 엔 `sys.get_int_max_str_digits` 가
+#   없는데 torch 폴리필 가드는 `>= (3, 11)` 이라 통과 → cast.detect 가 임포트에서 죽는다.
+#   deadsnakes 추가가 조용히 실패하면 apt 가 이 rc1 을 잡는다. python3.12 는 jammy 에
+#   패키지 자체가 없어 deadsnakes 외엔 출처가 없다 → rc 함정이 원천 차단된다.
 sudo apt-get update -qq
-if ! command -v python3.11 >/dev/null 2>&1; then
+if ! command -v python3.12 >/dev/null 2>&1; then
   sudo apt-get install -y -qq software-properties-common
   sudo add-apt-repository -y ppa:deadsnakes/ppa
   sudo apt-get update -qq
 fi
-sudo apt-get install -y -qq python3.11 python3.11-venv python3.11-dev build-essential
+# ffmpeg: yolo_cast 의 프레임 샘플링이 쓴다 — cv2 시킹은 인터레이스 방송 마스터에서
+# 조용히 첫 프레임만 돌려줘 매칭이 전멸한다(2026-09-15 실측 · yolo_cast.py 주석).
+sudo apt-get install -y -qq python3.12 python3.12-venv python3.12-dev build-essential ffmpeg
+# 잡히지 말아야 할 빌드가 잡혔으면 여기서 멈춘다 — venv 를 만들고 나서 알면 늦다.
+python3.12 -c "import sys; assert hasattr(sys, 'get_int_max_str_digits'), 'python3.12 가 프리릴리스 빌드다 — deadsnakes 확인'"
 
-sudo python3.11 -m venv "$CAST_VENV"
+sudo python3.12 -m venv "$CAST_VENV"
 sudo "$CAST_VENV/bin/pip" install --no-cache-dir --upgrade pip
 sudo "$CAST_VENV/bin/pip" install --no-cache-dir \
   "numpy==2.4.6" "opencv-contrib-python-headless==4.14.0.94" \

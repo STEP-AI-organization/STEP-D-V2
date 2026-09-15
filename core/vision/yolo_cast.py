@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -183,6 +185,26 @@ def _sample_times(beat: dict, frames_per_beat: int) -> list[float]:
     return [lo + (hi - lo) * i / (frames_per_beat - 1) for i in range(frames_per_beat)]
 
 
+def _extract_frame_ffmpeg(video_path, timestamp: float, size: tuple[int, int]):
+    """Decode one frame at `timestamp` via ffmpeg (`-ss` before `-i` + yadif)."""
+    import numpy as np
+
+    width, height = size
+    cmd = [
+        "ffmpeg", "-v", "error", "-ss", f"{max(0.0, timestamp):.3f}", "-i", str(video_path),
+        "-frames:v", "1", "-vf", "yadif=deint=interlaced",
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, timeout=60).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    need = width * height * 3
+    if len(out) < need:
+        return None
+    return np.frombuffer(out[:need], dtype=np.uint8).reshape(height, width, 3).copy()
+
+
 def _inside(face_box: Iterable[float], person_box: Iterable[float]) -> bool:
     fx1, fy1, fx2, fy2 = [float(v) for v in face_box]
     px1, py1, px2, py2 = [float(v) for v in person_box]
@@ -306,20 +328,42 @@ def detect_beat_cast(
     min_margin = float(os.environ.get("YOLO_CAST_FACE_MARGIN") or 0.05)
     device = os.environ.get("YOLO_CAST_DEVICE") or None
 
+    wanted: list[tuple[int, float]] = []
+    for index, beat in enumerate(beats or []):
+        beat_id = int(beat.get("id", index))
+        for timestamp in _sample_times(beat, frames_per_beat):
+            wanted.append((beat_id, timestamp))
+
+    # ⚠️ 방송 마스터에서 cv2.VideoCapture 시킹을 믿으면 안 된다 — 인터레이스 원본은
+    # swscaler 가 "Cannot convert interlaced to progressive" 로 죽고, 시킹이 조용히
+    # 실패해 **모든 샘플이 같은 첫 프레임**이 된다(2026-09-15 나미브 EP07 실측:
+    # 72프레임 전부 mean 동일 → 매칭 0건인데 status 는 done). ffmpeg 은 `-ss` 선행
+    # 시킹이 정확하고 yadif 가 인터레이스 플래그 프레임만 풀어 준다.
+    # ffmpeg 이 없는 환경에서만 cv2 로 폴백한다.
     samples: list[tuple[int, int, float, object]] = []
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"YOLO cast: video open failed: {video_path}")
-    try:
-        for index, beat in enumerate(beats or []):
-            beat_id = int(beat.get("id", index))
-            for timestamp in _sample_times(beat, frames_per_beat):
+    if shutil.which("ffmpeg"):
+        probe = cv2.VideoCapture(str(video_path))
+        width = int(probe.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        probe.release()
+        if width <= 0 or height <= 0:
+            raise RuntimeError(f"YOLO cast: video probe failed: {video_path}")
+        for beat_id, timestamp in wanted:
+            frame = _extract_frame_ffmpeg(video_path, timestamp, (width, height))
+            if frame is not None:
+                samples.append((beat_id, len(samples), timestamp, frame))
+    else:
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"YOLO cast: video open failed: {video_path}")
+        try:
+            for beat_id, timestamp in wanted:
                 cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000)
                 ok, frame = cap.read()
                 if ok and frame is not None:
                     samples.append((beat_id, len(samples), timestamp, frame))
-    finally:
-        cap.release()
+        finally:
+            cap.release()
 
     frame_matches: list[dict] = []
     batch_size = max(1, int(os.environ.get("YOLO_CAST_BATCH") or 16))
