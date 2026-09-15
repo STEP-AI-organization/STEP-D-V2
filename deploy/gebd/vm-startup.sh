@@ -121,7 +121,12 @@ command -v node >/dev/null || {
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs; }
 # ⚠️ frozen — no-frozen 은 부팅마다 의존성이 클라우드와 다르게 풀릴 수 있다(버전 드리프트).
 # GEBD 크래시루프(2026-08-25) 조사에서 이 드리프트가 유일한 환경 차이 축이었다.
-(cd "$REPO_DIR/apps/server" && npm i -g pnpm >/dev/null 2>&1; pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile)
+# ⚠️ pnpm 도 **버전을 박는다**(package.json packageManager 와 동일). 2026-09-15 실측:
+# 무지정 `npm i -g pnpm` 이 pnpm 12 를 깔았고, v9 lockfile 을 재해석하며 devDeps
+# (playwright)를 빼고 설치 → worker.ts 임포트 그래프가 naver-tv 를 당겨 **부팅마다 1초
+# 크래시루프**. CI=true 는 pnpm 이 남의 버전이 만든 modules 를 지울 때 TTY 확인을
+# 요구하며 죽는 것(ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY)을 막는다.
+(cd "$REPO_DIR/apps/server" && npm i -g pnpm@10.33.2 >/dev/null 2>&1; CI=true pnpm install --frozen-lockfile || CI=true pnpm install --no-frozen-lockfile)
 
 # ── 5. 시크릿 ───────────────────────────────────────────────────────────────
 sec() { gcloud secrets versions access latest --secret="$1" --project="$PROJECT" 2>/dev/null; }
@@ -172,6 +177,15 @@ while [ "$IDLE" -lt "$IDLE_SHUTDOWN_MIN" ]; do
   ELAPSED=$(( $(date +%s) - BEFORE ))
 
   if [ "$ELAPSED" -lt 30 ]; then
+    # cast 레인(별도 systemd · setup-cast-lane.sh)이 아직 일하는 중이면 유휴가 아니다 —
+    # gebd 큐만 보고 내리면 cast.detect 를 GPU 추론 도중에 죽인다 (2026-09-15).
+    # drain 모드라 큐가 비면 서비스가 스스로 끝나므로 is-active 하나로 충분하다.
+    if systemctl is-active --quiet stepd-worker-cast 2>/dev/null; then
+      IDLE=0
+      echo "[gebd-vm] cast 레인 작업 중 — 유휴 카운트 보류"
+      sleep 60
+      continue
+    fi
     IDLE=$((IDLE + 1))
     # ⚠️ **크래시와 유휴를 절대 같은 문구로 찍지 말 것.**
     # 예전엔 둘 다 "처리할 잡 없음" 이었다. 워커가 1초 만에 죽어도 `ELAPSED < 30` 이라
