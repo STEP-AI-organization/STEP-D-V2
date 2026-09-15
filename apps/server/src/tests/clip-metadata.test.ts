@@ -305,9 +305,9 @@ describe("⚠️ 만든 것이 실제로 소비된다 — 이 리포의 최빈 �
   it("발행 경로가 채널별 메타를 읽는다", () => {
     const w = read("worker.ts");
     assert.match(w, /metaForChannel\(/, "worker 가 채널별 메타를 꺼내 쓰지 않는다");
-    // YouTube·네이버 둘 다.
-    assert.match(w, /metaForChannel\(clip, "youtube"\)/, "YouTube 발행이 채널 메타를 안 쓴다");
-    assert.match(w, /const naverMeta = metaForChannel\(/, "네이버 발행이 채널 메타를 안 쓴다");
+    // YouTube·네이버 둘 다. (2026-09-15 async 전환 — 프로그램 고정 문구 로드 때문에 await 가 붙었다.)
+    assert.match(w, /await metaForChannel\(clip, "youtube"\)/, "YouTube 발행이 채널 메타를 안 쓴다");
+    assert.match(w, /const naverMeta = await metaForChannel\(/, "네이버 발행이 채널 메타를 안 쓴다");
   });
 
   it("생성 라우트가 채널 규칙(titlePrefix·hashtagTemplate)을 실제로 넘긴다", () => {

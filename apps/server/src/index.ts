@@ -79,6 +79,7 @@ import {
   setClipReframe,
   tryQueueClipReframe,
   compareAndSetClipReframe,
+  setClipSubBlurState,
   prependEntity,
   commitAdoption,
   markRecommendationRejected,
@@ -232,7 +233,7 @@ import {
   type SearchQuery,
   type SearchEventKind,
 } from "./db-pg.ts";
-import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort, renderStaticOverlayPng } from "./media/ffmpeg.ts";
+import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort, renderStaticOverlayPng, type SourceBlurRect } from "./media/ffmpeg.ts";
 import { type RenderPlan } from "./media/render-plan.ts";
 import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./auth/oauth-state.ts";
 import { synthesizeHookNarration } from "./media/tts.ts";
@@ -287,6 +288,13 @@ import {
   type ClipReframeState,
   type ReframePlan,
 } from "./media/reframe.ts";
+import {
+  clipSubBlurState,
+  subBlurFingerprint,
+  SUBBLUR_ZONE_TOP,
+  windowSubBlurEvents,
+  type ClipSubBlurState,
+} from "./media/subblur.ts";
 import { getAspectPreset, isAspectId } from "./media/aspect-presets.ts";
 import { bandsAroundVideo, frameVideoForAspect } from "./media/aspect-frame.ts";
 import { SHORTS_DEFAULT_ASPECT } from "./pipeline/factory.ts";
@@ -2872,6 +2880,9 @@ app.patch("/api/programs/:id", async (c) => {
     // recommendPrompt(beat 이어붙여 추천 구간 만들 때 얹는 지시). 소비처: core recommend
     // 프롬프트(program_context.json 경유) + clip-metadata·regenerate-titles. 빈 문자열 = 삭제.
     "titlePrompt", "recommendPrompt",
+    // 배포 설명 고정 문구 — 발행 직전 조립에서 동적 설명 아래·커머스 블록 위에 붙는다.
+    // 소비처: worker metaForChannel + updatemeta + naver (publish/description-footer.ts).
+    "descriptionFooter",
   ] as const;
   for (const k of strFields) {
     const v = body[k];
@@ -6090,6 +6101,9 @@ async function renderClipMedia(opts: {
   captions?: Caption[];
   /** Validated compact AI plan; omitted for the legacy basic Fit render. */
   reframePlan?: ReframePlan | null;
+  /** 원본 자막 블러 — **렌더 창 기준 상대 초** 사각형(캘러가 windowSubBlurEvents 로 되베이스).
+   *  renderShort 의 sourceBlur 로 그대로 흐른다(소스 좌표계 · 합성 전 · ASS 굽기 전). */
+  sourceBlur?: SourceBlurRect[] | null;
   /** 첫 3초 hook 프리롤 (편집자가 "첫 3초 훅" 토글 ON + clip.hookTimeSec 있을 때만). */
   hookPreroll?: { startTime: number; durationSec: number; hasAudio?: boolean; caption?: string; captionAssPath?: string | null } | null;
   /**
@@ -6274,7 +6288,9 @@ async function renderClipMedia(opts: {
   /** 계획을 실제로 넘겼나 — 넘겼으면 임시 파일의 주인이 부르는 쪽으로 넘어간다. */
   let handedOffTemps = false;
   try {
-    if (!dynamicReframe && !ass && !overlayPngActive && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
+    if (!dynamicReframe && !ass && !overlayPngActive && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll
+      && !(opts.sourceBlur && opts.sourceBlur.length)) {
+      // (sourceBlur 는 trimEncode 로 표현되지 않는다 — 블러 켠 16:9 순수 트림도 renderShort 로.)
       // Fast path only when there's genuinely nothing to bake (no ASS overlays, no static
       // overlay PNG, no grade, no volume change, no speed change, native 16:9, no hook
       // preroll). Any edit — including a canvas-PNG static overlay — routes through renderShort.
@@ -6345,6 +6361,7 @@ async function renderClipMedia(opts: {
         // 정적 오버레이 PNG — renderShort 의 basic 경로가 overlay=0:0 으로 합성한다(ASS 대신).
         overlayPngPath,
         reframePlan: opts.reframePlan ?? null,
+        sourceBlur: opts.sourceBlur ?? null,
         videoFilters, audioFilter, speed,
         bgType, bgColor, fit, cropRect, frame,
         hookPreroll,
@@ -9462,6 +9479,72 @@ app.post("/api/clips/:id/reframe", async (c) => {
   }
 });
 
+// ── 원본 자막 블러 (해외 배포 · 2026-09-15) ───────────────────────────────────
+//
+// 원본에 구운 한글 자막을 찾아(clip.subblur 잡 → core/vision/subtitle_blur.py) 렌더에서
+// 그 자리·그 시간에만 블러한다 — 번역 자막이 원본 자막과 겹치지 않게. **기본 OFF** 이고
+// 스위치는 editorState.subBlurOn(사용자 선택)이다. 여기는 검출만 큐잉한다 — 블러 적용
+// 여부는 export 가 그 스위치를 본다(검출해 두고 안 켜면 그냥 이벤트만 저장된 상태).
+app.get("/api/clips/:id/subblur", async (c) => {
+  const clip = await getEntity<Record<string, unknown>>("clip", c.req.param("id"));
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  return c.json({ clipId: c.req.param("id"), subBlur: clipSubBlurState(clip) });
+});
+
+app.post("/api/clips/:id/subblur", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const body = await c.req.json<{ retry?: unknown }>().catch(() => ({} as { retry?: unknown }));
+
+  let fingerprint: string;
+  try {
+    fingerprint = subBlurFingerprint(clip);
+  } catch (error) {
+    return c.json({
+      error: "invalid_subblur_input",
+      message: error instanceof Error ? error.message : String(error),
+    }, 400);
+  }
+
+  const stored = clipSubBlurState(clip);
+  if (stored && stored.fingerprint === fingerprint) {
+    if (stored.status === "ready" || stored.status === "queued" || stored.status === "running") {
+      return c.json({ clipId, subBlur: stored, reused: true, queued: false });
+    }
+    if (stored.status === "failed" && body.retry !== true) {
+      return c.json({
+        error: "subblur_retry_required", code: "subblur_retry_required",
+        message: "원본 자막 검출에 실패했습니다. retry=true 로 다시 시도해 주세요.",
+        clipId, subBlur: stored,
+      }, 409);
+    }
+  }
+
+  // reframe 의 CAS 만큼 엄밀하진 않다(연타 최악이 재검출 한 번). 결과 쓰기는 워커의
+  // setClipSubBlur 가 requestId 로 지키므로, 늦게 큐잉된 쪽(최신 requestId)이 이긴다.
+  const at = Date.now();
+  const requestId = newId("sb");
+  const queuedState: ClipSubBlurState = {
+    status: "queued", requestId, fingerprint, zoneTop: SUBBLUR_ZONE_TOP,
+    jobId: null, requestedAt: at, updatedAt: at, error: null,
+  };
+  const jobId = await enqueue(
+    "clip.subblur",
+    { clipId, requestId },
+    { dedupeKey: `clip.subblur:${clipId}:${requestId}` },
+  );
+  if (!jobId) {
+    return c.json({
+      error: "subblur_queue_failed", message: "원본 자막 검출 작업을 큐에 넣지 못했습니다.",
+    }, 503);
+  }
+  const withJob = { ...queuedState, jobId };
+  // JSONB 경로만 쓴다 — 행 전체를 다시 쓰면 그 사이 저장된 에디터 편집이 사라진다(reframe 과 동일).
+  await setClipSubBlurState(clipId, withJob);
+  return c.json({ clipId, subBlur: withJob, reused: false, queued: true }, 202);
+});
+
 // ── persist the editor's decision blob (revision JSON) ────────────────────────
 //
 // Save = metadata only, never a render (plan §2.4 deferred-render invariant). We store
@@ -10322,6 +10405,8 @@ async function serializeRenderPlan(
           ? { video: plan.frame.video, bands: plan.frame.bands, overlayRegions: plan.frame.overlayRegions }
           : null,
         reframePlan: plan.reframePlan,
+        // 원본 자막 블러 — 빠뜨리면 **편집자 PC 가 구운 것만** 블러 없이 나간다(조용한 어긋남).
+        sourceBlur: plan.sourceBlur,
         hookPreroll: plan.hookPreroll
           ? { startTime: plan.hookPreroll.startTime, durationSec: plan.hookPreroll.durationSec,
               hasAudio: plan.hookPreroll.hasAudio }
@@ -10647,6 +10732,31 @@ app.post("/api/clips/:id/export", async (c) => {
     }
   }
 
+  // 원본 자막 블러 게이트 — 켜져 있으면(editorState.subBlurOn) 검출이 준비된 상태에서만
+  // 렌더한다. 조용히 블러 없이 나가는 게 최악의 실패라(해외 채널에 원본 자막 그대로 노출),
+  // reframe_not_ready 와 같은 자세로 409 를 낸다. 기본 OFF — 스위치가 없으면 종전 그대로.
+  const subBlurOn = (clip.editorState as any)?.subBlurOn === true;
+  let subBlurMeta: { fp: string; at: number } | null = null;
+  let subBlurAllEvents: NonNullable<ClipSubBlurState["events"]> = [];
+  if (subBlurOn) {
+    const sb = clipSubBlurState(clip);
+    let sbFp = "";
+    try { sbFp = subBlurFingerprint(clip); } catch { /* 빈 fp → 아래 409 */ }
+    if (!sb || sb.status !== "ready" || !sbFp || sb.fingerprint !== sbFp) {
+      return c.json({
+        error: "subblur_not_ready", code: "subblur_not_ready",
+        message: sb?.status === "failed"
+          ? "원본 자막 검출에 실패했습니다. 다시 실행한 뒤 내보내 주세요."
+          : sb && sbFp && sb.fingerprint !== sbFp
+            ? "클립 구간이 바뀌어 원본 자막을 다시 검출해야 합니다."
+            : "원본 자막 검출이 완료된 뒤 내보낼 수 있습니다.",
+        subBlur: sb ?? null,
+      }, 409);
+    }
+    subBlurMeta = { fp: sbFp, at: sb.detectedAt ?? sb.updatedAt };
+    subBlurAllEvents = sb.events ?? [];
+  }
+
   // F3: the destination this render is for. Body `channel` lets the operator export the same
   // adopted segment once per destination; absent that, the clip's own target.
   const body = await c.req.json<{ channel?: string; plan?: boolean }>()
@@ -10765,6 +10875,9 @@ app.post("/api/clips/:id/export", async (c) => {
       reframe: reframePlan
         ? { mode: "ai_multi", inputFingerprint: reframe.inputFingerprint, planHash: reframe.planHash }
         : { mode: "basic" },
+      // 토글 자체는 editorState 에 있어 위에서 이미 해시에 들어간다 — 여기는 **검출 결과의
+      // 정체**(지문·시각)다. 같은 토글로 재검출만 했을 때도 캐시가 깨져야 한다.
+      subBlur: subBlurMeta,
     }))
     .digest("hex")
     .slice(0, 16);
@@ -10813,6 +10926,8 @@ app.post("/api/clips/:id/export", async (c) => {
     title: clip.title, editorState: es, aspect, captions,
     hookPreroll,
     reframePlan,
+    // 마스터 절대 이벤트 → 렌더 창 기준 상대 초. 창 밖 이벤트는 여기서 떨어진다.
+    sourceBlur: subBlurOn ? windowSubBlurEvents(subBlurAllEvents, snappedStart, snappedEnd) : null,
     planOnly,
   });
   if (!rendered) return c.json({ error: "render failed" }, 500);

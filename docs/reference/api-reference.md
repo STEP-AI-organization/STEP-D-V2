@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-09-15 · 라우트 285개** (GET 131 · POST 105 · DELETE 27 · PATCH 15 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-09-15 · 라우트 287개** (GET 132 · POST 106 · DELETE 27 · PATCH 15 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -215,6 +215,8 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `GET /api/clips/:id/reframe/candidates/:compareId/file/:name` | 비교 산출물 스트리밍(프록시·contact sheet) | 파일명 화이트리스트만 — 경로 탈출 차단. 불변 산출물이라 1시간 캐시 | `reframeCompareFileUrl` |
 | `POST /api/clips/:id/reframe/labels` | 비교 뷰어의 "이 장면은 이 레이아웃" 1클릭 정답 라벨 append | `{ compareId, chosen, machine?, beatId?, segStart?, segEnd?, atSec?, context?, note? }` → `{ ok }`. chosen 은 4레이아웃 화이트리스트 | `saveReframeLabel` |
 | `GET /api/clips/:id/reframe/labels` | 이 클립·비교의 라벨 목록 (뷰어 진행 표시) | `?compareId=` → `{ rows }` (테넌트 명시 필터) | `fetchReframeLabels` |
+| `GET /api/clips/:id/subblur` | 원본 자막 블러(해외 배포) 검출 상태 조회 | → `{ clipId, subBlur }` — `queued/running/ready/failed` + `events`(마스터 절대 초·소스 px) | `getClipSubBlur` |
+| `POST /api/clips/:id/subblur` | 원본 자막 검출 큐잉(`clip.subblur`). 같은 지문의 ready/진행 중은 재사용 · 실패 재시도는 `retry:true` | `{ retry? }` → `{ clipId, subBlur, reused, queued }`. 블러 적용 스위치는 `editorState.subBlurOn` — 켠 채 검출 미완료면 export 가 `409 subblur_not_ready` | `requestClipSubBlur` |
 | `POST /api/clips/:id/export` | **클립 렌더 — ffmpeg가 결과물을 굽는 유일한 지점** | `{ channel? }` → `{ clipId, clip, cached, preset, capped, hookPreroll }`. AI 모드는 현재 입력과 일치하는 ready plan 없이는 `409 reframe_not_ready`; revision에 모드·plan hash가 포함된다 | `exportClip` |
 | `POST /api/clips/:id/regenerate-titles` | 제목 후보 재생성 — 사용자 추가 지시 반영 | `{ prompt }`(예: "더 자극적으로", "이모지 넣지 마") → 후보 4~5개. **저장하지 않는다**(에디터 세션 로컬). 클립에 자막 없으면 409 | `regenerateTitles` |
 | `POST /api/clips/:id/generate-metadata` | 업로드용 title/description/tags를 자막 근거로 생성 | → 메타데이터 객체. **저장 X** — 프론트가 `state.uploadMeta`에 얹는다. 자막 없으면 409 | `generateUploadMetadata` |

@@ -8,7 +8,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn, formatTimecode } from "@/lib/utils";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
-import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, regenerateClipHook, frameUrl, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
+import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, regenerateClipHook, frameUrl, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate, getClipSubBlur, requestClipSubBlur, type ClipSubBlur } from "@/lib/data/api";
 import {
   applyTemplate,
   chunkCaption,
@@ -1082,6 +1082,12 @@ export function EditorShell({ clipId }: { clipId: string }) {
           frameMediaId={transcriptMediaId}
           apiBase={API_BASE}
         />
+        {/* 원본 자막 블러 — 해외 배포용. 클립(16:9)·숏폼(9:16) 공통이라 훅 카드와 달리 비율 게이트 없음. */}
+        <SubBlurCard
+          clipId={clip?.id}
+          on={(state as any).subBlurOn === true}
+          onToggle={(v) => update({ subBlurOn: v } as any)}
+        />
         <EditorTimeline
           state={state}
           update={update}
@@ -1115,6 +1121,126 @@ export function EditorShell({ clipId }: { clipId: string }) {
         </button>
         <span className="ml-2 text-[11px] text-zinc-500">다중 트랙 렌더 준비 중</span>
       </footer>
+    </div>
+  );
+}
+
+/**
+ * 원본 자막 블러 카드 — 해외 배포용(2026-09-15). 원본에 구운(burned-in) 자막을 검출해
+ * 렌더에서 **그 자리·그 시간에만** 블러한다(번역 자막이 그 위에 얹힘). 클립·숏폼 공통.
+ *
+ * 스위치는 editorState.subBlurOn(자동저장 · 기본 OFF). 켜는 순간 검출 잡을 큐잉하고 상태를
+ * 폴링한다 — 검출이 준비돼야 내보내기가 통과한다(export 가 subblur_not_ready 409 를 내므로,
+ * 여기 상태 표시가 곧 "언제 내보낼 수 있나"의 답이다).
+ */
+function SubBlurCard({
+  clipId,
+  on,
+  onToggle,
+}: {
+  clipId: string | undefined;
+  on: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  const { toast } = useToast();
+  const [sub, setSub] = useState<ClipSubBlur | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // 켜져 있으면 상태 확인 + 진행 중이면 5초 폴링(검출은 클립 구간만이라 보통 1~2분 안에 끝난다).
+  useEffect(() => {
+    if (!clipId || !on) return;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const res = await getClipSubBlur(clipId);
+        if (stop) return;
+        setSub(res.subBlur);
+        if (res.subBlur?.status === "queued" || res.subBlur?.status === "running") {
+          timer = setTimeout(tick, 5000);
+        }
+      } catch {
+        // 표시용 폴링 — 한 틱 실패는 다음 틱이 만회한다.
+        if (!stop) timer = setTimeout(tick, 8000);
+      }
+    };
+    void tick();
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [clipId, on]);
+
+  async function enable(retry = false) {
+    if (!clipId || busy) return;
+    setBusy(true);
+    try {
+      const res = await requestClipSubBlur(clipId, retry);
+      setSub(res.subBlur);
+      onToggle(true);
+    } catch (e) {
+      toast({
+        title: "원본 자막 검출 요청 실패",
+        description: e instanceof Error ? e.message : String(e),
+        tone: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const status = !on
+    ? null
+    : !sub
+      ? "상태 확인 중…"
+      : sub.status === "ready"
+        ? `자막 구간 ${sub.events?.length ?? 0}개 준비됨`
+        : sub.status === "failed"
+          ? "검출 실패"
+          : "원본 자막 검출 중…";
+
+  return (
+    <div className="mb-3 rounded-md border border-sky-500/30 bg-sky-500/[0.06] p-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[12px] font-semibold text-sky-300">원본 자막 블러</span>
+        <span className="text-[10.5px] text-zinc-400">
+          해외 배포용 — 원본에 박힌 자막을 찾아 그 자리만 가립니다
+        </span>
+        <label className="ml-auto flex items-center gap-1.5 text-[11.5px] text-zinc-200">
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={busy}
+            onChange={(e) => {
+              if (e.target.checked) void enable();
+              else onToggle(false);
+            }}
+          />
+          켜기
+        </label>
+      </div>
+      {on && (
+        <div className="mt-1.5 flex items-center gap-2 text-[11px] text-zinc-400">
+          <span>{status}</span>
+          {sub?.status === "failed" && (
+            <>
+              {sub.error ? (
+                <span className="max-w-[50%] truncate text-red-400/80" title={sub.error}>
+                  {sub.error}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void enable(true)}
+                disabled={busy}
+                className="rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-300 hover:bg-zinc-800"
+              >
+                다시 검출
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -68,7 +68,7 @@ import { runHarvestCycle } from "./pipeline/harvest-cycle.ts";
 import { isHarvestWindow } from "./pipeline/harvest.ts";
 import { kstDayKey } from "./billing/credits.ts";
 import { runChannelPipeline, shouldSweepChannel } from "./pipeline/channel-pipeline.ts";
-import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./pipeline/content-pipeline.ts";
+import { runClipReframe, runClipSubblur, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./pipeline/content-pipeline.ts";
 import {
   withAccessToken,
   fetchVideoAnalytics,
@@ -115,6 +115,7 @@ import { openCredential } from "./naver/naver-cred-store.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver/naver-workdir.ts";
 import { upsertDistribution } from "./publish/publish-guard.ts";
 import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce/commerce.ts";
+import { programFooterForClip, withProgramFooter } from "./publish/description-footer.ts";
 import {
   issueCoupangLinks, issueLinkForCandidate, PartnersSessionExpiredError,
 } from "./commerce/coupang-partners.ts";
@@ -164,7 +165,11 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "cast" | "naver" | "dow
   content: ["media.transcode", "media.prepare", "content.analyze", "match.align", "match.segment", "match.learn",
             "thumbnail.style", "thumbnail.generate", "clip.metadata", "clip.reframe",
             // 세로 4택 비교 — clip.reframe 와 같은 성격(프록시 ffmpeg + 파이썬 비전).
-            "reframe.compare"],
+            "reframe.compare",
+            // 원본 자막 블러 검출 — clip.reframe 와 같은 성격(ffmpeg 프레임 추출 + 파이썬 비전).
+            // 렌더 레인(사무실 PC)이 아닌 이유: 원본 바이트를 GCS 에서 당겨야 한다 — 바이트를
+            // 옮기는 잡은 클라우드(위 media.transcode 주석의 egress 계산과 같은 논리).
+            "clip.subblur"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
   // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
@@ -339,6 +344,13 @@ async function handle(job: Job): Promise<FollowUp | void> {
       await runReframeCompare({
         clipId: String(job.payload.clipId ?? ""),
         compareId: String(job.payload.compareId ?? ""),
+      });
+      return;
+    }
+    case "clip.subblur": {
+      await runClipSubblur({
+        clipId: String(job.payload.clipId ?? ""),
+        requestId: String(job.payload.requestId ?? ""),
       });
       return;
     }
@@ -2286,7 +2298,7 @@ async function markDistributionFailed(
     // 실패 뒤 재시도가 성공하면 그 적립이 이 줄을 지운다. 던지지 않는 함수다.
     await recordAutoPublishFailureForReport({
       clip: { ...clip, distributions }, clipId,
-      title: String(metaForChannel(clip, channel as any)?.title ?? clip.title ?? "").trim() || String(clip.title ?? ""),
+      title: String((await metaForChannel(clip, channel as any))?.title ?? clip.title ?? "").trim() || String(clip.title ?? ""),
       channel, accountId,
       channelLabel: accountId ? await publishChannelLabel(channel, accountId) : undefined,
       error,
@@ -2459,7 +2471,7 @@ function stripSpeakerLabels(s: string): string {
     .trim();
 }
 
-function metaForChannel(clip: any, channel: string): { title: string; description: string; tags?: string[] } {
+async function metaForChannel(clip: any, channel: string): Promise<{ title: string; description: string; tags?: string[] }> {
   // 커머스 제휴 링크 + 대가성 문구는 **여기서** 붙는다 — 발행 직전 조립 시점이다.
   //
   // 저장된 설명 본문에 미리 구워 넣지 않는 이유가 둘이다:
@@ -2467,7 +2479,12 @@ function metaForChannel(clip: any, channel: string): { title: string; descriptio
   //     지워지고, 그 순간 고객사의 파트너스 계정이 정지된다(누락 = 정지 사유).
   //  ② 링크 발급이 늦어도 발행이 안 막힌다. 링크가 없으면 원문을 그대로 돌려준다.
   // 게이트 OFF·링크 없음·YouTube 외 채널이면 아무것도 하지 않는다(commerce.ts).
-  const withLinks = (description: string) => withCommerceLinks(description, clip?.commerce?.links, channel);
+  //
+  // 프로그램 고정 문구(descriptionFooter)도 같은 시점에 붙는다(2026-09-15) — 동적 설명 아래,
+  // 커머스 블록 위. 저장본에 안 굽는 이유도 커머스와 같다(description-footer.ts 주석).
+  const footer = await programFooterForClip(clip);
+  const withLinks = (description: string) =>
+    withCommerceLinks(withProgramFooter(description, footer), clip?.commerce?.links, channel);
 
   const m = clip?.channelMeta?.[channel];
   if (m && (m.title || m.description)) {
@@ -2662,10 +2679,16 @@ async function handleNaverPublish(job: Job): Promise<void> {
       // 설명·태그는 **배포 시점에 사람이 넣은 값이 우선**이다. 클립은 제목 칸이 없고 설명
       // 300자가 전부라, 분석이 만든 synopsis 를 그대로 쓰면 잘리거나 어색하다.
       // 페이로드에 없을 때만 클립 메타로 폴백한다.
-      const naverMeta = metaForChannel(clip, channel);
-      const description = typeof job.payload.description === "string"
-        ? job.payload.description
-        : (clip.synopsis ?? "");
+      const naverMeta = await metaForChannel(clip, channel);
+      // 발행 시점에 사람이 넣은 설명(payload)은 metaForChannel 을 우회한다 — 프로그램 고정
+      // 문구를 여기서 한 번 더 건다(멱등이라 naverMeta.description 폴백 쪽엔 중복이 안 붙는다).
+      // ⚠️ 네이버 클립은 설명이 짧다(300자) — 고정글이 길면 화면에서 잘릴 수 있다.
+      const naverFooter = await programFooterForClip(clip);
+      const description = withProgramFooter(
+        typeof job.payload.description === "string"
+          ? job.payload.description
+          : (clip.synopsis ?? ""),
+        naverFooter);
       const tags = Array.isArray(job.payload.tags)
         ? (job.payload.tags as unknown[]).map(String)
         : (Array.isArray(clip.tags) ? clip.tags : undefined);
@@ -2948,13 +2971,15 @@ async function handleDistributionUpdateMeta(job: Job): Promise<void> {
 
   // 소스: 사용자가 저장한 채널 메타 우선, 없으면 파이프라인 기본.
   const saved = clip.channelMeta?.youtube ?? null;
-  const base = metaForChannel(clip, "youtube");
+  const base = await metaForChannel(clip, "youtube");
   const title = (String(saved?.title ?? base.title ?? "").trim()) || base.title;
   // ⚠️ 저장본(saved)을 그대로 쓰면 커머스 블록이 **벗겨진다** — metaForChannel 이 붙인 것을
   //    우회하는 경로이기 때문이다. 이미 붙어 있으면 그냥 통과하므로(멱등) 여기서 한 번 더 건다.
   //    안 그러면 "발행 땐 링크가 있었는데 제목 수정 한 번에 링크·대가성 문구가 사라지는" 사고가 난다.
+  //    프로그램 고정 문구(descriptionFooter)도 같은 이유·같은 멱등 규약으로 한 번 더 건다.
   const description = withCommerceLinks(
-    String(saved?.description ?? base.description ?? ""), clip?.commerce?.links, "youtube");
+    withProgramFooter(String(saved?.description ?? base.description ?? ""), await programFooterForClip(clip)),
+    clip?.commerce?.links, "youtube");
   const tags = Array.isArray(saved?.tags) && saved.tags.length ? saved.tags : base.tags;
 
   try {
@@ -3034,7 +3059,7 @@ async function runTikTokDraftPublish(job: Job): Promise<void> {
 
     if (tiktokDirectPostEnabled()) {
       // 다이렉트 게시 — 채널에 바로 공개(선행조건: 앱 심사 + video.publish 재연결 · upload-gate.ts).
-      const meta = metaForChannel(clip, "tiktok");
+      const meta = await metaForChannel(clip, "tiktok");
       const { publishId, postId, privacyLevel } = await withTikTokToken(acct, persist,
         (token) => uploadDirectPostToTikTok(token, file, { title: meta.title }));
       const url = postId && acct.username
@@ -3152,7 +3177,7 @@ async function runInstagramPublish(job: Job): Promise<void> {
     return;
   }
 
-  const meta = metaForChannel(clip, "instagram");
+  const meta = await metaForChannel(clip, "instagram");
   const { mediaId: igMediaId, permalink } = await publishInstagramReel({
     igUserId, accessToken: acct.accessToken, videoUrl,
     caption: [meta.title, meta.description].filter(Boolean).join("\n\n") || undefined,
@@ -3216,7 +3241,7 @@ async function runFacebookPublish(job: Job): Promise<void> {
   try {
     await pipeline(createReadStream(objPath), fs.createWriteStream(tmpPath));
     const video = await fs.promises.readFile(tmpPath);
-    const meta = metaForChannel(clip, "facebook");
+    const meta = await metaForChannel(clip, "facebook");
     const { videoId, scheduled, permalink } = await publishFacebookReel({
       pageId, pageToken: acct.pageAccessToken, video,
       title: meta.title, description: meta.description, scheduledPublishSec,
@@ -3321,7 +3346,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
   };
 
   let uploadedVideoId: string | undefined;
-  const meta = metaForChannel(clip, "youtube");
+  const meta = await metaForChannel(clip, "youtube");
   // 자동배포 리포트 적립 — 게시가 **기록까지 끝난 뒤에만** 부른다(성공·후속실패 양쪽 경로).
   // 메일은 여기서 안 나간다: 순방이 "오늘 몫 완료" 를 판정하면 묶어서 한 통 보낸다
   // (publish-notify.ts · 2026-08-26 리포트 전환). 던지지 않는 함수라 배포 상태 영향 없음.

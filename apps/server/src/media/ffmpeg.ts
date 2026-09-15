@@ -517,6 +517,12 @@ export type RenderShortOpts = {
    * (index.ts `channelBadgeLayout`). 두 곳이 따로 계산하면 아이콘과 이름이 어긋난다.
    */
   badge?: { path: string; y: number; h: number; x?: number } | null;
+  /** 원본 자막 블러(해외 배포 · 2026-09-15) — **소스 좌표계** 사각형을 합성(스케일·크롭)
+   *  **전에** 블러한다. 그래서 어떤 비율 프리셋·프레임·AI 경로를 타도 같은 자리에 맞는다.
+   *  시간은 `startTime` 기준 상대 초(0 = startTime) — index.ts 가 clip.subBlur 의 마스터
+   *  절대 이벤트를 windowSubBlurEvents 로 되베이스해 넘긴다. 번역 자막(ASS)은 합성 뒤에
+   *  구워지므로 블러 위에 앉는다. 빈 배열/미설정 = 블러 없음(무회귀). */
+  sourceBlur?: SourceBlurRect[] | null;
   /** AI multi-layout plan. Times are absolute master seconds and tracking centres are
    * normalized source-frame coordinates. The renderer intersects it with startTime/endTime
    * and deterministically fills every uncovered gap with `fit`. */
@@ -706,24 +712,35 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   const bgMode = opts.bgType === "solid" || opts.bgType === "image" ? "solid" : "blur";
   const solidColor = normalizeHexColor(opts.bgColor, "#0E0E12");
 
+  // 원본 자막 블러 — 본문·프리롤 입력 각각에 사전 체인. 프리롤 입력은 -ss 기준점이 다르므로
+  // enable 창을 (startTime - preStart) 만큼 민다(사각형 시간은 startTime 기준 상대).
+  const blurRects = sourceBlurRects(opts);
+  const bodySrc = blurRects.length ? "[sbb]" : "[1:v]";
+  const preSrc = blurRects.length ? "[sbp]" : "[0:v]";
+  const blurPre = blurRects.length
+    ? sourceBlurGraph("[1:v]", "[sbb]", blurRects, 0, "sbb_") + ";"
+      + sourceBlurGraph("[0:v]", "[sbp]", blurRects, startTime - preStart, "sbp_") + ";"
+    : "";
+
   // ── 본문(입력1) 체인 — 기존 renderShort 와 동일 구성, 입력 라벨만 [1:v] ──
   let vf: string;
   if (opts.fit === "cover") {
     // 축2 "채우기": 잘라 채운다(레터박스 없음).
-    vf = `[1:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[bc0]`;
+    vf = `${bodySrc}scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[bc0]`;
   } else if (bgMode === "solid") {
     const colorHex = `0x${solidColor.slice(1)}`;
     vf =
       `color=c=${colorHex}:s=${W}x${H}:d=${(bodyDur / speed).toFixed(3)}[bbg];` +
-      `[1:v]scale=${W}:${H}:force_original_aspect_ratio=decrease[bfg];` +
+      `${bodySrc}scale=${W}:${H}:force_original_aspect_ratio=decrease[bfg];` +
       `[bbg][bfg]overlay=(W-w)/2:(H-h)/2:shortest=1[bc0]`;
   } else {
     vf =
-      `[1:v]split=2[ba0][bb0];` +
+      `${bodySrc}split=2[ba0][bb0];` +
       `[ba0]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:1[bbg];` +
       `[bb0]scale=${W}:${H}:force_original_aspect_ratio=decrease[bfg];` +
       `[bbg][bfg]overlay=(W-w)/2:(H-h)/2[bc0]`;
   }
+  vf = blurPre + vf;
   let last = "[bc0]";
   if (videoFilters) { vf += `;${last}${videoFilters}[bcg]`; last = "[bcg]"; }
   if (assPath) {
@@ -737,7 +754,7 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   // ── 프리롤(입력0) — punch-in 전체화면 커버 + 살짝 채도·대비 강조 (+훅 캡션 ASS) ──
   const preCapAss = pre.captionAssPath ? `,ass='${escapeAssPath(pre.captionAssPath)}'` : "";
   vf +=
-    `;[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
+    `;${preSrc}scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
     `eq=saturation=1.20:contrast=1.05${preCapAss},fps=30,setsar=1[prev]`;
 
   // ── xfade: 프리롤 → 본문 (offset = preDur - transition) ──
@@ -788,6 +805,50 @@ function escapeAssPath(p: string): string {
   return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
+/** 소스 좌표계 블러 사각형 — 시간은 렌더 본문 시작(startTime) 기준 상대 초. */
+export type SourceBlurRect = {
+  x: number; y: number; w: number; h: number;
+  start: number; end: number;
+};
+
+/** 퇴화 사각형·깨진 값 컷 — ffmpeg 는 crop 범위 밖·반경 과대에서 통째로 죽는다. */
+function sourceBlurRects(opts: RenderShortOpts): SourceBlurRect[] {
+  return (opts.sourceBlur ?? []).filter((r) =>
+    r && Number.isFinite(r.x) && Number.isFinite(r.y)
+    && Number.isFinite(r.w) && Number.isFinite(r.h) && r.w >= 8 && r.h >= 8
+    && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start);
+}
+
+/**
+ * 원본 자막 블러 사전 체인 — `inLabel` 스트림의 각 사각형을 해당 구간에만 블러해 `outLabel` 로.
+ *
+ * 반드시 **합성(스케일·크롭) 전, 소스 좌표계**에서 불러야 한다 — 뒤에 끼우면 비율 프리셋마다
+ * 좌표 환산이 달라져 어긋난다. `offsetSec` 은 입력의 -ss 기준점 차이 보정(프리롤 입력은
+ * 본문과 다른 시각에서 시작한다). 반경은 글자 크기(박스 높이/5)에 비례 — 고정 반경은 대형
+ * 자막에서 윤곽이 남는다(2026-09-15 로컬 실측).
+ */
+function sourceBlurGraph(
+  inLabel: string,
+  outLabel: string,
+  rects: SourceBlurRect[],
+  offsetSec: number,
+  tag: string,
+): string {
+  const parts: string[] = [];
+  let cur = inLabel;
+  rects.forEach((r, i) => {
+    const rad = Math.max(4, Math.min(Math.max(12, Math.floor(r.h / 5)), Math.floor(Math.min(r.w, r.h) / 2) - 1));
+    const s = Math.max(0, r.start + offsetSec);
+    const e = Math.max(0, r.end + offsetSec);
+    parts.push(`${cur}split[${tag}m${i}][${tag}c${i}]`);
+    parts.push(`[${tag}c${i}]crop=${Math.round(r.w)}:${Math.round(r.h)}:${Math.round(r.x)}:${Math.round(r.y)},boxblur=${rad}:2[${tag}b${i}]`);
+    parts.push(`[${tag}m${i}][${tag}b${i}]overlay=${Math.round(r.x)}:${Math.round(r.y)}:enable='between(t,${ffNum(s)},${ffNum(e)})'[${tag}o${i}]`);
+    cur = `[${tag}o${i}]`;
+  });
+  parts.push(`${cur}null${outLabel}`);
+  return parts.join(";");
+}
+
 function trackingValueAt(
   tracking: ReframeTrackingKeyframe[],
   axis: "cx" | "cy",
@@ -831,7 +892,15 @@ function buildDynamicBodyGraph(
   const segments = normalizeReframeSegments(opts.reframePlan, opts.startTime, opts.endTime);
   const parts: string[] = [];
   const srcLabels = segments.map((_, i) => `[${prefix}src${i}]`).join("");
-  if (segments.length === 1) parts.push(`[${sourceInput}:v]setpts=PTS-STARTPTS,null${srcLabels}`);
+  // 원본 자막 블러 — setpts 정규화 직후·세그먼트 split 전에 건다. 이후 trim 의 relStart 와
+  // 블러 enable 창이 같은 시간축(0 = startTime)을 본다.
+  const blurRects = sourceBlurRects(opts);
+  if (blurRects.length) {
+    parts.push(`[${sourceInput}:v]setpts=PTS-STARTPTS[${prefix}sbin]`);
+    parts.push(sourceBlurGraph(`[${prefix}sbin]`, `[${prefix}sbsrc]`, blurRects, 0, `${prefix}sb`));
+    if (segments.length === 1) parts.push(`[${prefix}sbsrc]null${srcLabels}`);
+    else parts.push(`[${prefix}sbsrc]split=${segments.length}${srcLabels}`);
+  } else if (segments.length === 1) parts.push(`[${sourceInput}:v]setpts=PTS-STARTPTS,null${srcLabels}`);
   else parts.push(`[${sourceInput}:v]setpts=PTS-STARTPTS,split=${segments.length}${srcLabels}`);
 
   const fr = opts.frame;
@@ -1027,8 +1096,16 @@ function renderDynamicShortWithPreroll(
   const y = `max(0,min(ih-oh,${ffNum(cy)}*ih-oh/2))`;
   const parts = [body.graph];
   const preCapAss = pre.captionAssPath ? `,ass='${escapeAssPath(pre.captionAssPath)}'` : "";
+  // 프리롤 입력에도 원본 자막 블러 — 입력 기준점이 preStart 라 enable 창을 그만큼 민다.
+  const preBlurRects = sourceBlurRects(opts);
+  let preIn = "[0:v]setpts=PTS-STARTPTS";
+  if (preBlurRects.length) {
+    parts.push(`[0:v]setpts=PTS-STARTPTS[rfsbin]`);
+    parts.push(sourceBlurGraph("[rfsbin]", "[rfsbsrc]", preBlurRects, opts.startTime - preStart, "rfsb"));
+    preIn = "[rfsbsrc]null";
+  }
   parts.push(
-    `[0:v]setpts=PTS-STARTPTS,scale=${opts.width}:${opts.height}:force_original_aspect_ratio=increase,` +
+    `${preIn},scale=${opts.width}:${opts.height}:force_original_aspect_ratio=increase,` +
     `crop=${opts.width}:${opts.height}:x='${x}':y='${y}',` +
     `eq=saturation=1.20:contrast=1.05${preCapAss},fps=30,setsar=1[rfpre]`,
   );
@@ -1095,6 +1172,10 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   // 렌더가 solid만 되도 최소한 프리뷰↔렌더 일관성이 solid·blur 두 경로에서 성립.
   const bgMode = opts.bgType === "solid" || opts.bgType === "image" ? "solid" : "blur";
   const solidColor = normalizeHexColor(opts.bgColor, "#0E0E12");
+  // 원본 자막 블러 — 소스 좌표계 사전 체인. 모든 분기가 [0:v] 대신 srcV 를 소비한다.
+  const blurRects = sourceBlurRects(opts);
+  const srcV = blurRects.length ? "[sbv]" : "[0:v]";
+  const blurPre = blurRects.length ? sourceBlurGraph("[0:v]", "[sbv]", blurRects, 0, "sb") + ";" : "";
   let vf: string;
   const fr = opts.frame;
   if (fr) {
@@ -1109,7 +1190,7 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
       : `scale=${v.w}:${v.h}:force_original_aspect_ratio=increase,crop=${v.w}:${v.h}`;
     // ⚠️ color 에 d= 를 빼면 무한 입력이라 인코딩이 안 끝난다.
     vf = `color=c=black:s=${W}x${H}:d=${outDur.toFixed(3)}[base];` +
-         `[0:v]${fit},setsar=1[fgv];` +
+         `${srcV}${fit},setsar=1[fgv];` +
          `[base][fgv]overlay=${v.x}:${v.y}:shortest=1[comp0]`;
     const under = boxes(false);
     vf += under ? `;[comp0]${under}[comp1]` : `;[comp0]copy[comp1]`;
@@ -1126,27 +1207,28 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     // → 캔버스 위 (x,y) 에 검정 pad. 나머지 밴드(위/아래)가 캡션·브랜딩 자리가 된다.
     // AENA aspect-presets 수식 그대로: crop=ih*vW/vH:ih,scale=vw:vh,pad=W:H:vx:vy (pad 기본 검정).
     const r = opts.cropRect;
-    vf = `[0:v]crop=ih*${r.w}/${r.h}:ih,scale=${r.w}:${r.h},pad=${W}:${H}:${r.x}:${r.y}[v0]`;
+    vf = `${srcV}crop=ih*${r.w}/${r.h}:ih,scale=${r.w}:${r.h},pad=${W}:${H}:${r.x}:${r.y}[v0]`;
   } else if (opts.fit === "cover") {
     // 축2 "채우기": 프레임 없이 원본을 잘라 컨테이너를 꽉 채운다(레터박스·배경 없음).
     // increase 로 키워 넘치는 부분을 crop. bgType 은 여백이 없으므로 무의미.
-    vf = `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[v0]`;
+    vf = `${srcV}scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[v0]`;
   } else if (bgMode === "solid") {
     // 축2 "맞춤"(레터박스) + 검정/단색 여백. fit-to-frame foreground 를 단색 캔버스에 오버레이.
     // color 필터는 지속 프레임 만들고, -shortest 없이 -t로 컷하므로 무한 스트림도 안전.
     const colorHex = `0x${solidColor.slice(1)}`;
     vf =
       `color=c=${colorHex}:s=${W}x${H}:d=${outDur.toFixed(3)}[bg];` +
-      `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
+      `${srcV}scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
       `[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1[v0]`;
   } else {
     // 축2 "맞춤"(레터박스) + 원본 블러 여백. 전경은 decrease(맞춤), 뒤는 같은 영상의 크롭·블러.
     vf =
-      `split=2[a][b];` +
+      `${srcV}split=2[a][b];` +
       `[a]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:1[bg];` +
       `[b]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
       `[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]`;
   }
+  vf = blurPre + vf;
   let last = "[v0]";
   // Colour grade the composited frame BEFORE the ASS burn, so titles/captions stay crisp
   // and are not tinted by the operator's brightness/contrast/warmth adjustments.

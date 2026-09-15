@@ -100,6 +100,9 @@ export interface Program {
   titleCast?: Array<{ actorName: string; characterNames: string[] }>;
   /** 추천 구간(BEAT 조합) 생성 시 덧붙는 운영자 추가 지시. 반영 시점은 titlePrompt 와 같다. */
   recommendPrompt?: string;
+  /** 배포 설명 고정 문구 — 발행 시점에 생성 설명 **아래**에 자동으로 붙는다(유튜브·인스타·
+   *  페북·네이버). 저장된 설명 본문엔 안 굽는다 — 바꾸면 다음 발행부터 전부 새 문구. */
+  descriptionFooter?: string;
   /**
    * 네이버 클립 카테고리 기본값 (1차/2차). 이 프로그램의 클립이 어느 분류로 올라갈지.
    * 배포 모달이 이 값으로 미리 채우고, 자동배포는 이 값을 그대로 쓴다.

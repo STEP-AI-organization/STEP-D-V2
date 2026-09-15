@@ -33,6 +33,10 @@ export type JobType =
   | "content.analyze"
   // AI Shorts reframing: clip-only proxy + face/safety planner (content worker).
   | "clip.reframe"
+  // 원본 자막 블러 검출(해외 배포) — 클립 구간 프레임에서 burned-in 자막의 사각형+구간을
+  // 찾아 clip.subBlur.events 에 저장한다(core/vision/subtitle_blur.py). 렌더가 그 자리만
+  // 블러한다. clip.reframe 과 같은 성격(ffmpeg 프레임 추출 + 파이썬 비전) → content 레인.
+  | "clip.subblur"
   /**
    * 클립 렌더(ffmpeg 인코딩)를 **사무실 PC 로 넘기는** 잡. 2026-08-31 신설.
    *

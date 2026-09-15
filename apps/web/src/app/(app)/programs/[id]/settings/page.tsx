@@ -153,6 +153,9 @@ function ProgramDetailInner({
   // 합쳐졌다(2026-09-15) — 서버가 로스터에서 titleCast 를 되투영하므로 따로 보내지 않는다.
   const [castAliases, setCastAliases] = useState<Record<string, string>>(aliasesFromTitleCast(program.titleCast));
   const [recommendPrompt, setRecommendPrompt] = useState(program.recommendPrompt ?? "");
+  // 배포 설명 고정 문구 — 발행 시점에 생성 설명 아래에 자동 부착(서버 description-footer.ts).
+  // 빈 값 "" 저장 = 서버가 필드 삭제(고정 문구 없음) — 프롬프트 2종과 같은 시맨틱.
+  const [descriptionFooter, setDescriptionFooter] = useState(program.descriptionFooter ?? "");
   const [moods, setMoods] = useState<string[]>(program.moods ?? []);
   const [newMood, setNewMood] = useState("");
   const [cast, setCast] = useState<string[]>(castWithTitleCastActors(program.cast, program.titleCast));
@@ -224,6 +227,7 @@ function ProgramDetailInner({
     setTitlePrompt(program.titlePrompt ?? "");
     setCastAliases(aliasesFromTitleCast(program.titleCast));
     setRecommendPrompt(program.recommendPrompt ?? "");
+    setDescriptionFooter(program.descriptionFooter ?? "");
     setMoods(program.moods ?? []);
     setCast(castWithTitleCastActors(program.cast, program.titleCast));
     setCastPhotos(program.castPhotos ?? {});
@@ -233,7 +237,7 @@ function ProgramDetailInner({
     program.rightsUntil, program.rightsNote, program.endedDate,
     program.synopsis, program.broadcaster, program.schedule, program.firstAiredDate,
     program.currentInfo, program.director, program.spinoff, program.awards,
-    program.titlePrompt, program.recommendPrompt, program.titleCast,
+    program.titlePrompt, program.recommendPrompt, program.descriptionFooter, program.titleCast,
     program.moods, program.cast, program.castPhotos, program.posterImageDataUrl,
     program.naverCategory,
     hydratedRef,
@@ -478,6 +482,7 @@ function ProgramDetailInner({
         // "지시 없음" 상태로 되돌아간다(안 보내면 기존 값이 병합 유지돼 못 지운다).
         titlePrompt: titlePrompt.trim(),
         recommendPrompt: recommendPrompt.trim(),
+        descriptionFooter: descriptionFooter.trim(),
         moods,
         // 원본을 못 받았으면 **보내지 않는다** — 빈 문자열은 서버에서 삭제로 읽힌다.
         ...(imagesLoaded ? { posterImageDataUrl, brandIconDataUrl } : {}),
@@ -1015,6 +1020,29 @@ function ProgramDetailInner({
         {/* 거짓 즉시성 금지 — 저장해도 이미 분석된 회차에는 소급되지 않는다는 걸 명시 */}
         <p className="mt-3 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
           저장 후 <b>다음 분석부터</b> 적용됩니다 (이미 분석된 회차는 재분석 필요).
+        </p>
+      </Card>
+
+      {/* 배포 설명 고정 문구 — 발행 시점에 서버가 붙인다(publish/description-footer.ts).
+          편집 화면의 설명 값에 미리 굽지 않는다 — 커머스 대가성 문구와 같은 구조라,
+          문구를 바꾸면 다음 발행부터 전부 새 문구로 나가고 사람이 실수로 지울 수도 없다. */}
+      <Card
+        title="배포 설명 고정 문구"
+        hint="이 프로그램의 영상을 배포할 때, AI가 만든 설명 아래에 항상 붙는 고정 글."
+      >
+        <textarea
+          value={descriptionFooter}
+          onChange={(e) => setDescriptionFooter(e.target.value)}
+          rows={5}
+          placeholder={"예:\n▶ 본방송: 매주 수요일 밤 10시 30분\n▶ 공식 홈페이지: https://…\n#프로그램명 #하이라이트"}
+          className={textareaCls}
+        />
+        <p className="mt-3 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+          <b>발행 시점에</b> 설명 맨 아래에 자동으로 붙습니다 — 유튜브 · 인스타그램 · 페이스북 · 네이버
+          (틱톡은 캡션 구조상 제외). 여기서 바꾸면 <b>다음 발행부터</b> 전부 새 문구로 나가고, 이미
+          발행된 영상은 그대로입니다(유튜브는 메타데이터 재반영 시 새 문구 적용). 편집 화면의 설명
+          칸에는 보이지 않습니다 — 지워질 수 없게 발행 직전에 붙이는 구조입니다.
+          네이버 클립은 설명이 300자로 짧아 문구가 길면 잘릴 수 있습니다.
         </p>
       </Card>
 

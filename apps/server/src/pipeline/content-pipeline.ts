@@ -40,6 +40,7 @@ import {
   addCreditEntry,
   creditBalance,
   compareAndSetClipReframe,
+  compareAndSetClipSubBlur,
   updateMediaDuration,
 } from "../db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "../db-pg.ts";
@@ -51,6 +52,7 @@ import { toCoreRegistry, timelineToRows } from "../ai/cast.ts";
 import { titleCastOf } from "../ai/title-names.ts";
 import { createReadStream, listPrefix, parseObjectPath, readFile, uploadFile, useGcs } from "../media/storage-gcs.ts";
 import { castPrefix } from "../media/thumbnail-assets.ts";
+import { clipSubBlurState, subBlurFingerprint, SUBBLUR_ZONE_TOP, type ClipSubBlurState } from "../media/subblur.ts";
 import { enqueue } from "./queue.ts";
 import { newId } from "../ids.ts";
 import {
@@ -343,6 +345,135 @@ async function failClipReframe(
     error: { code, message: message.slice(0, 600), at },
   };
   await compareAndSetClipReframe(input.clipId, input.inputFingerprint, input.requestId, failed);
+}
+
+export interface ClipSubblurJobInput {
+  clipId: string;
+  requestId: string;
+}
+
+/**
+ * 원본 자막 블러 검출 (clip.subblur · content 레인).
+ *
+ * 클립 구간에서 프레임을 샘플해(기본 0.5초 간격) burned-in 자막의 사각형+시간 구간을 찾아
+ * `clip.subBlur.events` 에 저장한다(core/vision/subtitle_blur.py · PP-OCRv4 det ONNX).
+ * 렌더(/api/clips/:id/export)가 이 이벤트를 renderShort `sourceBlur` 로 넘겨 그 자리·그
+ * 시간에만 블러를 건다 — 해외 배포에서 번역 자막이 원본 한글 자막과 겹치지 않게.
+ *
+ * clip.reframe 과 같은 생명주기: requestId 로 뒤늦은 옛 결과의 덮어쓰기를 막고,
+ * fingerprint(소스·구간·존)가 어긋나면 낡은 요청이므로 조용히 끝낸다.
+ * 의존성: 파이썬 onnxruntime(requirements 선택 ⑤) + env SUBBLUR_DET_MODEL(det ONNX 경로).
+ */
+export async function runClipSubblur(input: ClipSubblurJobInput): Promise<void> {
+  const { clipId, requestId } = input;
+  if (!clipId || !requestId) throw new Error("clip.subblur requires clipId and requestId");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) throw new Error(`clip.subblur: clip ${clipId} not found`);
+  const state = clipSubBlurState(clip);
+  if (!state || state.requestId !== requestId) return; // 새 요청이 갈아탔다 — 이 잡은 낡음
+  let fingerprint: string;
+  try {
+    fingerprint = subBlurFingerprint(clip);
+  } catch (error) {
+    throw new Error(`clip.subblur: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (fingerprint !== state.fingerprint) return; // 큐잉 후 구간이 바뀜 — 낡은 입력으로 검출 금지
+
+  const mediaId = String(clip.sourceMediaId ?? "");
+  const media = mediaId ? await getMedia(mediaId) : undefined;
+  const clipStart = Number(clip.startTime);
+  const clipEnd = Number(clip.endTime);
+  if (!media) {
+    await setClipSubBlur(clipId, requestId, {
+      ...state, status: "failed", updatedAt: Date.now(),
+      error: "원본 영상을 찾을 수 없습니다.",
+    });
+    throw new Error(`clip.subblur: source media ${mediaId || "(empty)"} not found`);
+  }
+
+  await setClipSubBlur(clipId, requestId, { ...state, status: "running", updatedAt: Date.now(), error: null });
+
+  const safeClipId = clipId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), `stepd-subblur-${safeClipId}-`));
+  try {
+    const framesDir = path.join(work, "frames");
+    await fs.promises.mkdir(framesDir, { recursive: true });
+    const outPath = path.join(work, "events.json");
+    const dur = clipEnd - clipStart;
+    // 긴 구간은 샘플을 성기게 — 검출은 CPU 프레임당 ~0.7초라 10분짜리를 0.5초 간격으로
+    // 돌리면 잡 하나가 15분을 먹는다. 자막은 1초 이상 떠 있으므로 1초 간격도 안 놓친다.
+    const step = dur > 120 ? 1.0 : 0.5;
+    const sourcePath = useGcs() ? await signedProxySource(media.path) : media.path;
+    // 원본 해상도 그대로 추출 — 이벤트 좌표가 곧 렌더의 소스 좌표계다(스케일 환산 없음).
+    await runChild(
+      "ffmpeg",
+      [
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", clipStart.toFixed(6), "-i", sourcePath, "-t", dur.toFixed(6),
+        "-map", "0:v:0", "-an", "-vf", `fps=1/${step}`, "-q:v", "3",
+        path.join(framesDir, "f_%05d.jpg"),
+      ],
+      { label: "subblur frames", timeoutMs: 10 * 60 * 1000 },
+    );
+    const model = (process.env.SUBBLUR_DET_MODEL ?? "").trim();
+    await runChild(CORE_PYTHON, [
+      "-u", "-m", "core.vision.subtitle_blur",
+      "--frames", framesDir,
+      "--step", String(step),
+      "--t0", clipStart.toFixed(3),
+      "--clip-end", clipEnd.toFixed(3),
+      "--zone-top", String(state.zoneTop ?? SUBBLUR_ZONE_TOP),
+      ...(model ? ["--model", model] : []),
+      "--out", outPath,
+    ], {
+      cwd: REPO_ROOT,
+      label: "core.subblur",
+      timeoutMs: 20 * 60 * 1000,
+      env: { PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+    });
+
+    const raw = JSON.parse(await fs.promises.readFile(outPath, "utf8")) as Record<string, unknown>;
+    const events = (Array.isArray(raw.events) ? raw.events : [])
+      .map((e: any) => ({
+        x: Math.round(Number(e?.x)), y: Math.round(Number(e?.y)),
+        w: Math.round(Number(e?.w)), h: Math.round(Number(e?.h)),
+        start: Number(e?.start), end: Number(e?.end),
+      }))
+      .filter((e) => Number.isFinite(e.x) && Number.isFinite(e.y)
+        && e.w >= 8 && e.h >= 8 && Number.isFinite(e.start) && e.end > e.start);
+    const at = Date.now();
+    await setClipSubBlur(clipId, requestId, {
+      ...state,
+      status: "ready",
+      events,
+      width: Math.round(Number(raw.width) || 0),
+      height: Math.round(Number(raw.height) || 0),
+      detectedAt: at,
+      updatedAt: at,
+      error: null,
+    });
+    console.log(`[subblur] ${clipId} 완료 — 이벤트 ${events.length}개 (${dur.toFixed(1)}s · step ${step}s)`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await setClipSubBlur(clipId, requestId, {
+      ...state, status: "failed", updatedAt: Date.now(), error: message.slice(0, 600),
+    });
+    throw error;
+  } finally {
+    await fs.promises.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * **같은 requestId 일 때만** subBlur 를 JSONB 경로 CAS 로 쓴다 — 새 요청을 옛 잡이 못 덮고,
+ * 검출이 도는 사이 저장된 에디터 편집(행의 다른 필드)도 건드리지 않는다.
+ */
+async function setClipSubBlur(
+  clipId: string,
+  requestId: string,
+  next: ClipSubBlurState,
+): Promise<void> {
+  await compareAndSetClipSubBlur(clipId, requestId, next);
 }
 
 export interface ReframeCompareJobInput {

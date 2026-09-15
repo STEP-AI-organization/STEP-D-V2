@@ -478,6 +478,9 @@ export interface CreateProgramInput {
   titleCast?: Array<{ actorName: string; characterNames: string[] }>;
   /** 추천(BEAT 조합) 추가 지시. "" = 필드 삭제(지시 없음 복귀). */
   recommendPrompt?: string;
+  /** 배포 설명 고정 문구 — 발행 직전 설명 아래에 자동 부착(서버 publish/description-footer.ts).
+   *  "" = 필드 삭제(고정 문구 없음). */
+  descriptionFooter?: string;
   // ── 편성 상태 · 담당 · 권리 윈도우 (FLOWS F10 · 2026-08-10) ──────────────
   /** 방영 중/종영/편성 예정. 사람이 지정한다 — 날짜로 자동 판정하지 않는다. */
   status?: ProgramStatus;
@@ -644,6 +647,45 @@ export async function requestClipReframe(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode, ...(retry ? { retry: true } : {}) }),
+    }),
+  );
+}
+
+/** 원본 자막 블러(해외 배포) 검출 상태 — 서버 `clip.subBlur` 미러 (media/subblur.ts). */
+export interface ClipSubBlur {
+  status: "queued" | "running" | "ready" | "failed";
+  requestId: string;
+  fingerprint: string;
+  zoneTop: number;
+  jobId?: string | null;
+  events?: { x: number; y: number; w: number; h: number; start: number; end: number }[];
+  width?: number;
+  height?: number;
+  requestedAt: number;
+  updatedAt: number;
+  detectedAt?: number;
+  error?: string | null;
+}
+
+export interface ClipSubBlurResponse {
+  clipId: string;
+  subBlur: ClipSubBlur | null;
+}
+
+export async function getClipSubBlur(clipId: string): Promise<ClipSubBlurResponse> {
+  return json(await fetch(`${API_BASE}/clips/${clipId}/subblur`, { cache: "no-store" }));
+}
+
+/** 검출을 큐잉한다(이미 준비/진행 중이면 재사용). 스위치 자체는 editorState.subBlurOn — 저장은 에디터 자동저장이 한다. */
+export async function requestClipSubBlur(
+  clipId: string,
+  retry = false,
+): Promise<ClipSubBlurResponse & { reused?: boolean; queued?: boolean }> {
+  return json(
+    await fetch(`${API_BASE}/clips/${clipId}/subblur`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(retry ? { retry: true } : {}),
     }),
   );
 }

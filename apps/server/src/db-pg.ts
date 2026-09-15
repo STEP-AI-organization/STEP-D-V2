@@ -930,6 +930,40 @@ export async function compareAndSetClipReframe(
   return data;
 }
 
+/**
+ * clip.subBlur 를 **JSONB 경로만** 원자 교체한다 — 저장된 requestId 가 일치할 때만(CAS).
+ *
+ * 워커가 행 전체를 다시 쓰면 검출이 도는 사이 저장된 에디터 편집(editorState)이 사라진다 —
+ * reframe 과 정확히 같은 이유고, reframe.test.ts 의 "whole-entity worker writes 금지" 가
+ * content-pipeline 전체를 스캔해 이 규칙을 강제한다.
+ */
+export async function compareAndSetClipSubBlur(
+  clipId: string,
+  requestId: string,
+  subBlur: unknown,
+): Promise<Record<string, unknown> | undefined> {
+  const { rows } = await pool.query(
+    `UPDATE entities
+        SET data = jsonb_set(data, '{subBlur}', $3::jsonb, true)
+      WHERE kind = 'clip' AND id = $1
+        AND data->'subBlur'->>'requestId' = $2
+      RETURNING data`,
+    [clipId, requestId, JSON.stringify(subBlur)],
+  );
+  return rows[0]?.data as Record<string, unknown> | undefined;
+}
+
+/** clip.subBlur 를 JSONB 경로만 교체(무조건) — 새 검출 요청을 심는 라우트용. 행 전체를 안 쓴다. */
+export async function setClipSubBlurState(clipId: string, subBlur: unknown): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE entities
+        SET data = jsonb_set(data, '{subBlur}', $2::jsonb, true)
+      WHERE kind = 'clip' AND id = $1`,
+    [clipId, JSON.stringify(subBlur)],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
 export async function prependEntity(kind: EntityKind, id: string, data: unknown): Promise<void> {
   const { rows } = await pool.query(
     "SELECT COALESCE(MIN(ord), 0) - 1 AS m FROM entities WHERE kind = $1",
