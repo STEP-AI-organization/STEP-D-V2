@@ -5496,6 +5496,88 @@ function layoutTitleLines(es: any, W: number, H: number, scale: number): TitleLi
  * 그대로 `<img>` 로 보여주므로). 그림자 offset/blur 는 미리보기 CSS(스테이지 px)를 scale 배해
  * 출력 해상도로 올린다 — `<img>` 가 다시 스테이지 크기로 줄어들면 CSS 와 같은 시각이 된다.
  */
+/**
+ * 제목 줄의 그림자 — **줄이 정한 값이 있으면 그것, 없으면 예전 고정값.**
+ *
+ * 예전엔 빌더에 `{offsetY: 2*scale, blur: 6*scale, rgba(0,0,0,.5)}` 가 박혀 있어서
+ * `OverlayTextItem` 이 타입상 그림자를 받는데도 **편집으로 바꿀 길이 없었다**(2026-09-14).
+ *
+ * 규칙 셋:
+ *  · 미설정(undefined) = 예전 값 그대로 — 무회귀가 기본이다.
+ *  · `null` = 그림자 **끔**. "없음" 과 "안 정했음" 은 다른 뜻이라 구분한다.
+ *  · offset·blur 는 **스테이지 px** 로 받아 scale 배한다 — 미리보기 CSS 와 같은 축
+ *    (size·stroke.width 처럼 normalizeEditorCoords 가 올리는 값이 아니다. 저장 모델을
+ *    안 건드리려고 여기서만 환산한다).
+ */
+function titleShadowOf(t: any, scale: number): OverlayTextItem["shadow"] {
+  const DEFAULT = { offsetY: 2 * scale, blur: 6 * scale, color: "rgba(0,0,0,0.5)" };
+  if (t?.shadow === null) return undefined;          // 명시적 끄기
+  const s = t?.shadow;
+  if (!s || typeof s !== "object") return DEFAULT;   // 미설정 → 예전 그대로
+  const n = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  return {
+    offsetX: n(s.offsetX, 0) * scale,
+    offsetY: n(s.offsetY, 2) * scale,
+    blur: Math.max(0, n(s.blur, 6) * scale),
+    color: typeof s.color === "string" && s.color.trim() ? s.color : DEFAULT.color,
+  };
+}
+
+/**
+ * CSS 색(`#rrggbb` · `rgb()` · `rgba()`) → ASS 색 + 알파.
+ *
+ * ⚠️ ASS 알파는 **반전**이다 — `&H00&` 가 불투명, `&HFF&` 가 투명. 그림자 기본색이
+ * `rgba(0,0,0,0.5)` 라 알파를 못 옮기면 폴백 그림자만 새까맣게 나온다.
+ */
+function cssToAss(color: string): { c: string; a: string } {
+  const s = String(color ?? "").trim();
+  const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(s);
+  if (!m) return { c: hexToAss(s || "#000000"), a: "&H00&" };
+  const hex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).toUpperCase().padStart(2, "0");
+  const alpha = m[4] != null ? Math.max(0, Math.min(1, Number(m[4]))) : 1;
+  return {
+    c: `&H00${hex(Number(m[3]))}${hex(Number(m[2]))}${hex(Number(m[1]))}&`,
+    a: `&H${hex((1 - alpha) * 255)}&`,
+  };
+}
+
+/**
+ * 제목 줄의 외곽선·그림자를 ASS 태그로. **canvas-PNG 와 같은 줄 값에서 온다.**
+ *
+ * ## 왜 필요한가
+ * 이 경로는 PNG 생성이 실패했을 때만 도는 폴백인데, 줄에 외곽선·그림자를 정해도 여기엔
+ * 반영이 안 돼 **폴백이 걸린 영상만 사람이 고친 게 빠졌다.** 가끔 다르게 나오는 건
+ * 가끔이라서 더 못 찾는다.
+ *
+ * ## 정한 것만 덮는다 (무회귀)
+ * 줄이 아무것도 안 정했으면 **빈 문자열**을 돌려 `putWin` 의 기존 `\bord2\shad1` 을 그대로 둔다.
+ * 여기서 기본값까지 갈아치우면 canvas 를 안 타는 **애니메이션·시간창 제목 줄**(ASS 전용
+ * 경로)의 생김새가 요청하지도 않았는데 바뀐다.
+ *
+ * ⚠️ 남아 있는 어긋남(따로 다룰 것): 아무것도 안 정한 **정적** 줄은 canvas 가 외곽선을 안
+ * 그리는데 ASS 폴백은 `\bord2` 로 검은 테두리를 붙인다. 이건 이 변경 이전부터 있던 차이라
+ * 여기서 같이 건드리지 않는다 — 기능 하나에 회귀 위험을 섞지 않는다.
+ *
+ * ## ASS 가 못 따라가는 것 (의도적 근사)
+ * ASS 그림자는 **깊이 하나**다 — x/y 분리도, 블러도 없다. `offsetY` 를 깊이로 쓰고 색·알파만
+ * 옮긴다. 블러가 빠져 폴백 그림자는 조금 더 또렷하다. 폴백에서 그 이상은 못 맞춘다.
+ */
+function assTitleStyleTag(t: any, scale: number): string {
+  let tag = "";
+  const st = t?.stroke;
+  if (st && typeof st.width === "number" && st.width > 0 && typeof st.color === "string") {
+    tag += `\\bord${Math.max(0, Math.round(st.width))}\\3c${hexToAss(st.color)}`;
+  }
+  if (t?.shadow === null) {
+    tag += "\\shad0";
+  } else if (t?.shadow && typeof t.shadow === "object") {
+    const sh = titleShadowOf(t, scale)!;
+    const shc = cssToAss(sh.color);
+    tag += `\\shad${Math.max(0, Math.round(sh.offsetY))}\\4c${shc.c}\\4a${shc.a}`;
+  }
+  return tag;
+}
+
 function buildStaticOverlayItems(
   es: any, W: number, H: number, scale: number, iconBox: { w: number; h: number } | null,
 ): OverlayTextItem[] {
@@ -5518,8 +5600,15 @@ function buildStaticOverlayItems(
       text: L.text, x: L.bx, y: L.by, align: L.align, baseline: "top",
       fontPx: L.fitPx, weight: 800, font: typeof L.t?.font === "string" ? L.t.font : undefined,
       color: L.colorHex, opacity: 1,
+<<<<<<< HEAD
       ...(L.spacing ? { letterSpacing: L.spacing } : {}),
       ...(titleShadowOn ? { shadow: { offsetY: 2 * scale, blur: 6 * scale, color: "rgba(0,0,0,0.5)" } } : {}),
+=======
+      // 그림자는 **줄이 정한다.** 예전엔 여기 고정값이 박혀 있어 편집으로 못 바꿨다
+      // (타입은 원래 받고 있었는데 빌더가 안 읽었다 · 2026-09-14).
+      // 미설정이면 예전 값 그대로 — 무회귀가 기본이다. `null` 은 "그림자 끔" 이다.
+      shadow: titleShadowOf(L.t, scale),
+>>>>>>> 9d8628c (feat(overlay): 제목 줄마다 글꼴·크기·외곽선·그림자를 정한다)
       stroke,
     });
   }
@@ -5610,10 +5699,19 @@ function buildEditorAss(
       const color = hexToAss(L.colorHex);
       // 글꼴 — canvas-PNG 경로(overlay-canvas)와 같은 값을 ASS 에도 얹는다. 안 얹으면 이 경로만
       // Style Default(Pretendard) 로 나가 같은 영상 안에서 줄마다 글꼴이 달라진다.
+<<<<<<< HEAD
       // 자간(\fsp · 출력 px)·그림자 끄기(\shad0)도 같은 이유로 얹는다 — PNG 경로와 시각 일치.
       const fnTag = (ASS_FONT_BY_ID[String((t as any)?.font ?? "")] ? `\\fn${ASS_FONT_BY_ID[String((t as any).font)]}` : "")
         + (L.spacing ? `\\fsp${Math.round(L.spacing)}` : "")
         + ((es as any).titleShadow === false ? "\\shad0" : "");
+=======
+      const fnTag = ASS_FONT_BY_ID[String((t as any)?.font ?? "")] ? `\\fn${ASS_FONT_BY_ID[String((t as any).font)]}` : "";
+      // 외곽선·그림자도 canvas-PNG 와 **같은 줄 값**에서 온다. 이 경로는 PNG 생성이 실패했을
+      // 때만 도는 폴백인데, 예전엔 외곽선이 `bord 2` 고정이고 그림자는 `\shad1` 고정이라
+      // **폴백이 걸린 영상만 모양이 달랐다**(줄의 stroke 를 canvas 만 읽고 있었다).
+      // 사람이 볼 때 "가끔 다르게 나온다" 가 되는데, 가끔이라서 더 못 찾는다.
+      const styleTag = assTitleStyleTag(t, scale);
+>>>>>>> 9d8628c (feat(overlay): 제목 줄마다 글꼴·크기·외곽선·그림자를 정한다)
       const fs = assFs(fitPx);
       const win = winFor(t);
       if (win) {
@@ -5633,10 +5731,10 @@ function buildEditorAss(
             // 좌/우 정렬은 가로도 한쪽으로만 자란다(중앙정렬은 대칭이라 보정 불필요).
             const xFix = an === 8 ? 0 : (an === 7 ? -1 : 1) * grow * textWidthPx(t.text, fitPx) / 2;
             const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}\\org(${orgX},${orgY})`;
-            putWin(an, bx + ((k.x ?? 0) / 100) * W + xFix, by + ((k.y ?? 0) / 100) * H - yFix, fs, color, 2, "&H00000000&", t.text, s, Math.min(win[1], s + SAMPLE_STEP), extra + fnTag);
+            putWin(an, bx + ((k.x ?? 0) / 100) * W + xFix, by + ((k.y ?? 0) / 100) * H - yFix, fs, color, 2, "&H00000000&", t.text, s, Math.min(win[1], s + SAMPLE_STEP), extra + fnTag + styleTag);
           }
         } else {
-          putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1], fnTag);
+          putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1], fnTag + styleTag);
         }
       }
     }
@@ -10298,6 +10396,24 @@ app.get("/api/clips/:id/overlay-title", async (c) => {
       color: String(l?.color ?? ""),
       size: typeof l?.size === "number" ? l.size : null,
       font: String(l?.font ?? ""),
+      // 외곽선·그림자 — 콘솔 미리보기가 실렌더와 같은 그림을 그리려면 같이 와야 한다.
+      // `shadow: null` 은 **끔**이고 `undefined` 는 **안 정함**(엔진 기본값)이다 — 그 구분을
+      // 응답에서도 지킨다. 뭉개면 화면이 "끔" 과 "기본" 을 같게 보여 준다.
+      stroke: l?.stroke && typeof l.stroke === "object"
+        ? {
+            color: String((l.stroke as any).color ?? ""),
+            width: typeof (l.stroke as any).width === "number" ? (l.stroke as any).width : 0,
+          }
+        : null,
+      shadow: l?.shadow === null ? null
+        : (l?.shadow && typeof l.shadow === "object"
+          ? {
+              offsetX: typeof (l.shadow as any).offsetX === "number" ? (l.shadow as any).offsetX : 0,
+              offsetY: typeof (l.shadow as any).offsetY === "number" ? (l.shadow as any).offsetY : 2,
+              blur: typeof (l.shadow as any).blur === "number" ? (l.shadow as any).blur : 6,
+              color: String((l.shadow as any).color ?? "rgba(0,0,0,0.5)"),
+            }
+          : undefined),
     })),
     // 미리보기 기하 — 콘솔이 실렌더와 같은 자리에 그리려면 이 셋이 있어야 한다.
     titleY: typeof es.titleY === "number" ? es.titleY : null,
@@ -10319,13 +10435,46 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
   // 줄은 **두 가지 모양**을 받는다: `"글자"` 와 `{ text, color }`.
   // 색을 고칠 수 있어야 한다는 요구(2026-09-14)가 나중에 붙었는데, 기존 호출부가 문자열
   // 배열을 보내고 있어 모양을 갈아치우면 그쪽이 조용히 깨진다. 둘 다 받는다.
+  const hex6 = (v: unknown) => {
+    const s = String(v ?? "").trim();
+    // #RRGGBB 만 통과시킨다. 아무 문자열이나 흘려보내면 렌더(ASS)가 조용히 기본색으로
+    // 떨어져 "바꿨는데 그대로" 가 된다 — factory 의 titleColor 검증과 같은 규칙이다.
+    return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toUpperCase() : "";
+  };
+  /** 0 이상 유한수만. 상한을 두는 건 화면이 아니라 여기다 — 화면은 우회할 수 있다. */
+  const num = (v: unknown, max: number) =>
+    (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.min(v, max) : null);
+
   const parsed = b.lines.map((raw) => {
     const o = (raw && typeof raw === "object") ? raw as Record<string, unknown> : null;
     const text = String((o ? o.text : raw) ?? "").trim();
-    const c0 = String(o?.color ?? "").trim();
-    // #RRGGBB 만 통과시킨다. 아무 문자열이나 흘려보내면 렌더(ASS)가 조용히 기본색으로
-    // 떨어져 "바꿨는데 그대로" 가 된다 — factory 의 titleColor 검증과 같은 규칙이다.
-    return { text, color: /^#[0-9a-fA-F]{6}$/.test(c0) ? c0.toUpperCase() : "" };
+    const st = o?.stroke as Record<string, unknown> | null | undefined;
+    const sh = o?.shadow as Record<string, unknown> | null | undefined;
+    return {
+      text,
+      color: hex6(o?.color),
+      // 글꼴은 **카탈로그에 있는 id 만**. 오타·구값이 흘러가면 렌더가 조용히 기본 폰트로
+      // 그려 "골라도 안 바뀐다" 가 된다(factory 의 titleFont 검증과 같은 규칙).
+      font: FONT_FAMILIES.some((f) => f.id === String(o?.font ?? "")) ? String(o!.font) : "",
+      // 크기는 **스테이지 px** 다(저장 모델 그대로 · normalizeEditorCoords 가 출력 px 로 올린다).
+      size: num(o?.size, 400),
+      // 외곽선: `null` = 지움, 객체 = 설정, 미설정 = 그대로 둠.
+      stroke: st === null ? null
+        : (st && typeof st === "object"
+          ? { color: hex6(st.color) || "#000000", width: num(st.width, 40) ?? 0 }
+          : undefined),
+      // 그림자: `null` = 끔, 객체 = 설정, 미설정 = 그대로 둠. 색은 CSS 색이라 hex 로 안 좁힌다
+      // (기본값이 rgba(0,0,0,0.5) 다). 다만 길이는 제한해 본문에 아무거나 못 싣게 한다.
+      shadow: sh === null ? null
+        : (sh && typeof sh === "object"
+          ? {
+              offsetX: num(sh.offsetX, 40) ?? 0,
+              offsetY: num(sh.offsetY, 40) ?? 2,
+              blur: num(sh.blur, 80) ?? 6,
+              color: String(sh.color ?? "rgba(0,0,0,0.5)").slice(0, 40),
+            }
+          : undefined),
+    };
   })
     // 빈 줄은 버린다 — 빈 문자열을 그대로 두면 렌더가 빈 줄 자리를 잡아 제목이 밀린다.
     .filter((l) => l.text).slice(0, 3);
@@ -10337,9 +10486,14 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
     ...(prev[i] ?? style),      // 있던 줄은 그 스타일, 새 줄은 마지막 줄 스타일을 물려받는다
     id: `t${i}`,
     text: l.text,
-    // 색은 **보냈을 때만** 덮는다. 안 보낸 줄은 있던 색 그대로 — 문자열 배열로 부르는
-    // 기존 호출부가 색을 날려 먹지 않게 하는 자리다.
+    // ⚠️ 전부 **보냈을 때만** 덮는다. 안 보낸 항목은 있던 값 그대로 — 문자열 배열로 부르는
+    // 기존 호출부(글자만 고치는 경로)가 스타일을 날려 먹지 않게 하는 자리다.
+    // `null` 은 "지움" 이라 뜻이 달라, undefined 와 구분해 그대로 싣는다.
     ...(l.color ? { color: l.color } : {}),
+    ...(l.font ? { font: l.font } : {}),
+    ...(l.size != null ? { size: l.size } : {}),
+    ...(l.stroke !== undefined ? { stroke: l.stroke } : {}),
+    ...(l.shadow !== undefined ? { shadow: l.shadow } : {}),
   }));
 
   await putEntity("clip", clipId, {
