@@ -287,7 +287,7 @@ import {
   type ClipReframeState,
   type ReframePlan,
 } from "./media/reframe.ts";
-import { getAspectPreset } from "./media/aspect-presets.ts";
+import { getAspectPreset, isAspectId } from "./media/aspect-presets.ts";
 import { bandsAroundVideo, frameVideoForAspect } from "./media/aspect-frame.ts";
 import { SHORTS_DEFAULT_ASPECT } from "./pipeline/factory.ts";
 import { layoutFingerprint, restampPendingClips } from "./pipeline/rule-restamp.ts";
@@ -10436,6 +10436,9 @@ app.get("/api/clips/:id/overlay-title", async (c) => {
       logo: es.channelIconOff === true ? false : true,
       subtitles: es.captionsOn === true,
       timebox: String(es.channelBoxText ?? "").trim() !== "",
+      // 배치 — editorState.aspect 가 정본이고, 없으면 클립에 기록된 렌더 결과 화면비를 보여준다
+      // (`/export` 가 굽고 나서 clip.aspectRatio 에 남긴다). 둘 다 없으면 템플릿이 정한다.
+      aspect: String(es.aspect ?? clip.aspectRatio ?? ""),
     },
   });
 });
@@ -10544,6 +10547,10 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
     // 시간박스는 문구(channelBoxText)가 있어야 그려진다 — 끄기만 지원한다. 켜려면 프로그램
     // 편성 문구가 필요해서, 여기서 되살리면 빈 박스가 나간다.
     if (lay.timebox === false) esPatch.channelBoxText = "";
+    // 영상 배치 — 5-값 enum 만. 모르는 값은 버린다(렌더가 조용히 폴백하면 "골라도 안 바뀐다").
+    // ⚠️ 배치를 바꾸면 **영상 잘리는 모양이 통째로 달라진다.** 글자만 다시 얹는 게 아니라
+    //    크롭부터 다시 계산하므로, 콘솔은 "다시 구운 뒤에 반영된다" 를 사람에게 말해야 한다.
+    if (isAspectId(lay.aspect)) esPatch.aspect = lay.aspect;
   }
 
   await putEntity("clip", clipId, {
