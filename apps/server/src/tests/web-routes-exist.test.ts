@@ -16,8 +16,18 @@ import { fileURLToPath } from "node:url";
  * 타입은 이 경계를 못 지킨다(웹→서버는 문자열 URL 이다). 그래서 문자열로 맞춰 본다.
  */
 
+import { routeSource } from "./sources.ts";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_INDEX = path.resolve(HERE, "../index.ts");
+/**
+ * 라우트가 사는 모든 파일 — `index.ts` + 도메인별 `<도메인>/routes.ts`.
+ *
+ * ⚠️ `index.ts` 하나만 읽으면 **옮긴 라우트를 못 찾아 “웹이 부르는데 서버에 없다” 로
+ *    오판한다.** 2026-09-14 분할 1호(챗봇·리포트)에서 실제로 여기가 빨개졌고,
+ *    그게 이 검사가 제 일을 했다는 증거다. 범위를 넓히는 것으로 고친다 — 경로를
+ *    지우는 것으로 고치면 검사 범위가 줄어 조용히 초록이 된다.
+ */
+const serverRouteSource = () => routeSource(path.resolve(HERE, ".."));
 const WEB_API = path.resolve(HERE, "../../../web/src/lib/data/api.ts");
 
 /**
@@ -41,7 +51,7 @@ function normalize(raw: string): string {
     .replace(/\/+$/, "");
 }
 
-/** index.ts 의 `app.get("/api/…")` 류에서 경로만 뽑아 같은 방식으로 정규화한다. */
+/** 서버 소스의 `app.get("/api/…")` 류에서 경로만 뽑아 같은 방식으로 정규화한다. */
 function serverRoutes(source: string): Set<string> {
   const out = new Set<string>();
   const re = /\bapp\.(get|post|put|patch|delete|all)\(\s*["'`](\/api\/[^"'`]*)["'`]/g;
@@ -86,8 +96,8 @@ function webPaths(source: string): Set<string> {
 }
 
 describe("웹이 부르는 서버 라우트가 전부 존재한다", () => {
-  it("api.ts 의 모든 경로가 index.ts 에 있다", () => {
-    const routes = serverRoutes(stripComments(fs.readFileSync(SERVER_INDEX, "utf-8")));
+  it("api.ts 의 모든 경로가 서버에 있다", () => {
+    const routes = serverRoutes(stripComments(serverRouteSource()));
     const missing = [...webPaths(stripComments(fs.readFileSync(WEB_API, "utf-8")))].filter((p) => !routes.has(p));
     assert.deepEqual(missing, [],
       "웹이 부르는데 서버에 없는 경로다 — 라우트를 지웠다면 호출부도 같이 지웠어야 한다");
@@ -96,7 +106,7 @@ describe("웹이 부르는 서버 라우트가 전부 존재한다", () => {
   it("스캐너 자체가 살아 있다 — 양쪽에서 경로를 실제로 찾았다", () => {
     // ⚠️ 정규식이 안 맞으면 위 테스트는 "빈 목록 vs 빈 목록" 으로 **항상 통과**한다.
     // 검사 범위가 0 이 된 걸 초록으로 착각하지 않게 하한을 박아 둔다.
-    assert.ok(serverRoutes(stripComments(fs.readFileSync(SERVER_INDEX, "utf-8"))).size > 150, "서버 라우트를 못 찾았다");
+    assert.ok(serverRoutes(stripComments(serverRouteSource())).size > 150, "서버 라우트를 못 찾았다");
     assert.ok(webPaths(stripComments(fs.readFileSync(WEB_API, "utf-8"))).size > 80, "웹 호출 경로를 못 찾았다");
   });
 });

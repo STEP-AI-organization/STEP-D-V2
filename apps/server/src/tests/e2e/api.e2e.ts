@@ -325,3 +325,41 @@ describe("e2e — /api/state 조건부 요청 (ETag)", () => {
     assert.equal(second.headers.get("content-encoding"), null, "빈 본문에 압축 헤더가 붙었다");
   });
 });
+
+/**
+ * 도메인 폴더로 **옮긴 라우트가 실제로 등록돼 있는가** (2026-09-14 분할 1호).
+ *
+ * 소스 스캔으로는 이걸 증명할 수 없다 — 스캔은 "그 파일에 `app.get(...)` 이 있다" 만 본다.
+ * `registerChatbotRoutes(app)` 호출을 깜빡해도 파일은 그대로라 **전부 초록인 채 404 가 난다.**
+ * 그래서 실제로 HTTP 로 두드린다.
+ *
+ * ⚠️ 미인증 401 로는 부족하다 — `/api/*` 는 **없는 경로도 401** 이다(인증 미들웨어가 라우트
+ *    매칭보다 먼저 돈다). 세션을 들고 200 을 받아야 "등록됐다" 가 증명된다.
+ */
+describe("e2e — 도메인 폴더로 옮긴 라우트가 등록돼 있다", () => {
+  const OWNER = { email: "owner@split.e2e", password: "split-owner-pw" };
+
+  before(async () => {
+    const admin = new Session();
+    await admin.login(SUPERADMIN.email, SUPERADMIN.password);
+    const { status, body } = await admin.post<{ id?: string }>("/api/superadmin/tenants", {
+      name: "분할 방송", ownerEmail: OWNER.email, ownerPassword: OWNER.password, ownerName: "분할 대표",
+    });
+    assert.equal(status, 200, `회사 개설 실패: ${JSON.stringify(body)}`);
+  });
+
+  it("chatbot/routes.ts — GET /api/chatbot/threads 가 200 이다", async () => {
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+    const { status, body } = await s.json<{ threads?: unknown[] }>("/api/chatbot/threads");
+    assert.equal(status, 200, `등록 안 됨(404면 registerChatbotRoutes 누락): ${JSON.stringify(body)}`);
+    assert.ok(Array.isArray(body.threads), "threads 배열이 아니다");
+  });
+
+  it("report/routes.ts — GET /api/reports 가 200 이다", async () => {
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+    const { status } = await s.json("/api/reports");
+    assert.equal(status, 200, "등록 안 됨(404면 registerReportRoutes 누락)");
+  });
+});

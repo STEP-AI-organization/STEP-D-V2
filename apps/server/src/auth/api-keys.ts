@@ -234,11 +234,23 @@ export const API_KEY_ROUTES: RouteRule[] = [
   // ⚠️ **`/clips/:id/editor` 는 열지 않는다.** 그건 editorState 를 통째로 덮어, 콘솔이
   //    안 들고 있는 트랙·리프레임·아이콘을 지운다. 좁은 이 라우트만 연다.
   { method: "PATCH", path: /^\/api\/clips\/[^/]+\/overlay-title$/, scope: "factory:write" },
+  // 읽기도 같이 연다 — `/api/state` 가 api-key 호출에는 editorState 를 통째로 빼므로
+  // (19.4MB 경량화) 콘솔은 **지금 뭐라고 박혀 있는지** 알 길이 없었다. 그래서 수정 칸이
+  // 늘 빈 채로 열려 현재 문구를 모른 채 덮어쓰게 돼 있었다(2026-09-14). 이 라우트는
+  // 줄(글자·색)과 그릴 위치만 돌려주므로 경량화를 되돌리지 않는다.
+  { method: "GET", path: /^\/api\/clips\/[^/]+\/overlay-title$/, scope: "factory:read" },
 
   // 결제 수단 **등록만** (2026-08-20). 카드번호는 브라우저 → 포트원으로 직행하고 우리는
   // 빌링키만 받는다. 아래 셋 외의 결제 경로는 전부 세션 전용으로 남는다 —
   // 제거(DELETE)·충전(topup)·자동충전 한도(auto-topup)는 여기 없다. 의도적이다.
   { method: "POST", path: /^\/api\/billing\/card\/prepare$/, scope: "billing:write" },
+  // 자체 입력창(비인증결제) — 카드정보를 받아 **서버가** 빌링키를 발급하고 저장까지 끝낸다.
+  // 빌링키는 브라우저로 안 나간다.
+  // ⚠️ 이걸 열면 **부르는 쪽 서버가 카드데이터 경로에 들어온다**(PCI DSS 범위). 결제창(SDK)
+  //    경로는 카드번호가 브라우저→포트원으로 직행해 그 범위가 아니었다. 여는 이유는 UX 하나다
+  //    (낯선 결제창에서 헤매지 않게 · 2026-09-11 결정). 되돌리려면 이 줄을 지우고 호출부를
+  //    SDK 경로(`/prepare` + `POST /card`)로 되돌리면 된다 — 그 경로는 계속 살아 있다.
+  { method: "POST", path: /^\/api\/billing\/card\/issue$/, scope: "billing:write" },
   { method: "POST", path: /^\/api\/billing\/card$/, scope: "billing:write" },
   { method: "GET", path: /^\/api\/billing\/card$/, scope: "billing:read" },
   // 자동 충전 — 카드를 등록해 두면 잔액이 말라 라인이 서지 않게 한다(2026-08-21).

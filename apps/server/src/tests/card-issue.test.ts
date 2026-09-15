@@ -118,12 +118,20 @@ describe("카드 등록의 권한·민감정보 경계", () => {
     fileURLToPath(new URL("../billing/card-register.ts", import.meta.url)), "utf8");
   const route = /app\.post\("\/api\/billing\/card\/issue",[\s\S]*?\}\);/.exec(source)?.[0] ?? "";
 
-  it("세션 관리자 확인은 **라우트**에 있다 — 위임 함수는 권한을 모른다", () => {
+  it("권한 확인은 **라우트**에 있다 — 위임 함수는 권한을 모른다", () => {
     assert.ok(route.length > 0, "제품 카드 등록 라우트를 못 찾았다");
     const call = route.indexOf("registerCard(");
     assert.ok(call > 0, "라우트가 registerCard 로 위임하지 않는다");
-    assert.ok(route.indexOf("requireManager(c)") >= 0 && route.indexOf("requireManager(c)") < call,
-      "권한 확인이 위임보다 뒤이거나 없다");
+    // ⚠️ 불변식은 **"라우트에서, 위임보다 먼저"** 다. 어느 게이트를 쓰느냐가 아니다.
+    //    2026-09-14 에 `requireManager` → `requireCardActor` 로 바꿨다: 결제수단 등록
+    //    경로의 행위자 규칙("세션이면 매니저, API 키면 그 키" · 2026-08-20)을 `/prepare`·
+    //    `POST /card` 는 따르는데 여기만 세션 전용이라 고객사 콘솔이 이 입력창을 못 썼다.
+    //    `requireCardActor` 도 세션이면 결국 `requireManager` 를 부르므로 세션 쪽 권한선은
+    //    그대로다. 이름을 하나로 못 박으면 게이트를 정당하게 바꿀 때마다 여기가 빨개진다.
+    const gate = ["requireCardActor(c)", "requireManager(c)"]
+      .map((g) => route.indexOf(g)).filter((i) => i >= 0);
+    assert.ok(gate.length > 0, "라우트에 권한 확인이 없다");
+    assert.ok(Math.min(...gate) < call, "권한 확인이 위임보다 뒤다");
   });
 
   it("동의·입력 검증을 발급보다 먼저 수행한다", () => {

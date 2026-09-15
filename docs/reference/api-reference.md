@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-09-14 · 라우트 283개** (GET 130 · POST 105 · DELETE 27 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-09-15 · 라우트 285개** (GET 131 · POST 105 · DELETE 27 · PATCH 15 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 

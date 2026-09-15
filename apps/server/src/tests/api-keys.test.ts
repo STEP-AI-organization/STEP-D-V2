@@ -210,6 +210,18 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("POST", "/api/programs/p_1/autofill/chat", all).ok, false);
   });
 
+  it("카드 등록 세 라우트가 **같은 문**을 쓴다 — 한쪽만 막히면 흐름이 끊긴다", () => {
+    // 준비 → 발급 → 저장이 한 흐름이다. `/issue` 만 세션 전용이라 고객사 콘솔이
+    // "준비는 되는데 발급이 403" 으로 막혀 있었다(2026-09-14 정정).
+    for (const p of ["/api/billing/card/prepare", "/api/billing/card/issue", "/api/billing/card"]) {
+      assert.equal(checkRoute("POST", p, all).ok, true, `열려 있어야 하는 경로: POST ${p}`);
+    }
+    // 해지는 계속 막힌다 — 카드 제거는 라인 정지(사보타주)다(파일 상단 스코프 주석).
+    assert.equal(checkRoute("DELETE", "/api/billing/card", all).ok, false);
+    // 충전은 사람이 판단한다 — 키로 돈을 쓰게 열지 않는다.
+    assert.equal(checkRoute("POST", "/api/credits/topup", all).ok, false);
+  });
+
   it("굽힌 제목은 좁은 라우트로만 고친다 — editorState 통째 PATCH 는 막힌다", () => {
     // 제목 줄만 바꾸고 재렌더를 예약하는 좁은 라우트.
     assert.equal(checkRoute("PATCH", "/api/clips/c_1/overlay-title", all).ok, true);
