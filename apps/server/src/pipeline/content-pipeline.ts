@@ -960,7 +960,7 @@ type Short = {
   /** 대안 오버레이 문구 — 운영자가 고를 목록(2026-09-14 · 기본 1 + 대안 2 = 최소 3).
    *  **만들 때 같이** 뽑는다. 나중에 다시 부르면 그때마다 Gemini 호출이 붙고, 같은 장면인데
    *  실행마다 결이 달라진다. 구형 추천엔 이 키가 없으므로 읽는 쪽은 항상 기본값을 깔 것. */
-  title_alts?: { title_line1?: string; title_line2?: string }[];
+  title_alts?: { kind?: string; title_line1?: string; title_line2?: string }[];
   /** 처음 제목 생성 단계(_retitle_final_windows)에서 뽑힌 대체 제목 후보들.
    *  기본 title을 포함할 수도 있고 아닐 수도 있음 — 프론트는 dedupe 처리. */
   title_candidates?: string[];
@@ -1033,6 +1033,8 @@ function recFromShort(episodeId: string, s: Short) {
         .map((a) => ({
           titleLine1: typeof a?.title_line1 === "string" ? a.title_line1.trim() : "",
           titleLine2: typeof a?.title_line2 === "string" ? a.title_line2.trim() : "",
+          // 유형(2026-09-15 3형: name 실명 · quote 인용 · situation 상황) — 화면 후보 뱃지용.
+          ...(a?.kind === "name" || a?.kind === "quote" || a?.kind === "situation" ? { kind: a.kind } : {}),
         }))
         .filter((a) => a.titleLine1 || a.titleLine2)
       : undefined,

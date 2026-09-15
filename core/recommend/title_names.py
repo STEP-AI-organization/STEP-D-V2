@@ -35,6 +35,24 @@ def is_actor_title(text, ctx):
                    for m in cast for n in m["characterNames"])
 
 
+def visible_actor_names(ctx, visible_cast):
+    """YOLO 가 이 구간에서 **확인한** 배우명 집합. 실명형 판정·검증이 같은 집합을 본다."""
+    allowed = set()
+    cast = title_cast(ctx)
+    for row in (visible_cast if isinstance(visible_cast, list) else []):
+        if not isinstance(row, dict):
+            continue
+        actor = str(row.get("actorName") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if actor:
+            allowed.add(actor)
+        for member in cast:
+            if name == str(member.get("actorName") or "").strip() or name in member.get("characterNames", []):
+                allowed.add(member["actorName"].strip())
+    allowed.discard("")
+    return allowed
+
+
 def is_visible_actor_title(text, ctx, visible_cast):
     """Reject configured actor names that were not identified in the selected beats.
 
@@ -46,19 +64,8 @@ def is_visible_actor_title(text, ctx, visible_cast):
         return False
     if not isinstance(visible_cast, list):
         return True
-    allowed = set()
+    allowed = visible_actor_names(ctx, visible_cast)
     cast = title_cast(ctx)
-    for row in visible_cast:
-        if not isinstance(row, dict):
-            continue
-        actor = str(row.get("actorName") or "").strip()
-        name = str(row.get("name") or "").strip()
-        if actor:
-            allowed.add(actor)
-        for member in cast:
-            if name == str(member.get("actorName") or "").strip() or name in member.get("characterNames", []):
-                allowed.add(member["actorName"].strip())
-    allowed.discard("")
     configured = {m["actorName"].strip() for m in cast}
     mentioned = {name for name in configured if name and name in text}
     return mentioned.issubset(allowed)
@@ -82,4 +89,47 @@ def guard_title_result(result, ctx):
             short["title_candidates"] = list(dict.fromkeys(
                 [short.get("title") or NAMELESS_TITLE] + [c for c in short["title_candidates"]
                  if isinstance(c, str) and c.strip() and is_visible_actor_title(c, ctx, visible_cast)]))
+        _guard_overlay_variants(short, ctx, visible_cast)
     return result
+
+
+def _guard_overlay_variants(short, ctx, visible_cast):
+    """오버레이 3형(title_alts kind name/quote/situation · 2026-09-15) 검증 + 실명형 승격.
+
+    - 모든 변형의 줄은 미확인 배우명 검증(is_visible_actor_title)을 통과해야 남는다.
+    - kind "name"(실명형)은 추가로 **확인된 배우명을 실제로 담고 있어야** 실명형이다 —
+      이름 없는 문장에 name 딱지만 붙은 것은 situation 으로 강등한다.
+    - 검증 통과한 실명형이 있으면 **기본(title_line1/2)을 실명형으로 교체**한다
+      (사용자 2026-09-15 "실명형에 우리 파이프라인" — YOLO 확인이 곧 승격 조건이다).
+      원래 기본 줄은 alts 맨 앞에 남겨 운영자가 되돌릴 수 있게 한다.
+    선별이 아니라 **결정론 규칙**이다 — LLM 에게 어느 형을 내보낼지 묻지 않는다.
+    """
+    alts = short.get("title_alts")
+    if not isinstance(alts, list) or not alts:
+        return
+    allowed = visible_actor_names(ctx, visible_cast)
+    kept = []
+    promote = None
+    for alt in alts:
+        if not isinstance(alt, dict):
+            continue
+        a1 = str(alt.get("title_line1") or "").strip()
+        a2 = str(alt.get("title_line2") or "").strip()
+        if not (a1 or a2):
+            continue
+        if not all(is_visible_actor_title(line, ctx, visible_cast) for line in (a1, a2) if line):
+            continue  # 미확인 배우명이 든 변형은 유형 불문 버린다
+        kind = str(alt.get("kind") or "").strip().lower()
+        if kind == "name":
+            if not any(name in a1 or name in a2 for name in allowed):
+                alt = {**alt, "kind": "situation"}   # 이름 없는 실명형 → 상황형 강등
+            elif promote is None:
+                promote = (a1, a2)
+        kept.append(alt)
+    short["title_alts"] = kept
+    if promote:
+        prev = (str(short.get("title_line1") or "").strip(), str(short.get("title_line2") or "").strip())
+        if prev != promote:
+            if prev[0] or prev[1]:
+                kept.insert(0, {"title_line1": prev[0], "title_line2": prev[1]})
+            short["title_line1"], short["title_line2"] = promote

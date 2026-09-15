@@ -77,3 +77,47 @@ def test_changed_policy_invalidates_only_the_recommend_checkpoint(tmp_path):
             step=lambda _: None, timed=lambda *_: None)
     assert result["shorts"][0]["title"] == "김도현의 선택"
     assert result["_titleCast"] == CTX["titleCast"]
+
+
+def test_overlay_variants_guard_promotes_verified_name_kind():
+    from core.recommend.title_names import guard_title_result
+    ctx = {"titleCast": [{"actorName": "김도현", "characterNames": ["민준"]}]}
+    short = {
+        "title": "합격 발표 순간",
+        "title_line1": "합격 발표", "title_line2": "그 순간",
+        "visible_cast": [{"castId": "a", "name": "민준", "actorName": "김도현"}],
+        "title_alts": [
+            {"kind": "name", "title_line1": "김도현의 일침", "title_line2": "정적"},
+            {"kind": "quote", "title_line1": "지금 뭐라고?", "title_line2": "귀를 의심"},
+            {"kind": "situation", "title_line1": "싸우는 자매", "title_line2": ""},
+        ],
+    }
+    guard_title_result({"shorts": [short]}, ctx)
+    # 검증된 실명형이 기본으로 승격되고, 원래 기본은 후보 맨 앞에 남는다.
+    assert (short["title_line1"], short["title_line2"]) == ("김도현의 일침", "정적")
+    assert short["title_alts"][0] == {"title_line1": "합격 발표", "title_line2": "그 순간"}
+    kinds = [a.get("kind") for a in short["title_alts"]]
+    assert "quote" in kinds and "situation" in kinds
+
+
+def test_overlay_variants_guard_drops_unverified_and_demotes_nameless():
+    from core.recommend.title_names import guard_title_result
+    ctx = {"titleCast": [{"actorName": "김도현", "characterNames": ["민준"]},
+                          {"actorName": "이서연", "characterNames": ["하린"]}]}
+    short = {
+        "title": "합격 발표 순간",
+        "title_line1": "합격 발표", "title_line2": "그 순간",
+        "visible_cast": [],   # YOLO 가 아무도 확인 못 함
+        "title_alts": [
+            {"kind": "name", "title_line1": "이서연의 눈물", "title_line2": ""},   # 미확인 배우명 → 탈락
+            {"kind": "name", "title_line1": "무너지는 표정", "title_line2": ""},   # 이름 없는 실명형 → 상황형 강등
+            {"kind": "quote", "title_line1": "지금 뭐라고?", "title_line2": ""},
+        ],
+    }
+    guard_title_result({"shorts": [short]}, ctx)
+    # 승격 없음(검증된 실명형이 없다) — 기본 유지.
+    assert (short["title_line1"], short["title_line2"]) == ("합격 발표", "그 순간")
+    lines = [a["title_line1"] for a in short["title_alts"]]
+    assert "이서연의 눈물" not in lines
+    demoted = next(a for a in short["title_alts"] if a["title_line1"] == "무너지는 표정")
+    assert demoted["kind"] == "situation"

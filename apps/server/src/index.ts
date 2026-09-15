@@ -8633,6 +8633,8 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     sourceMediaId: master?.id,
     sourceRecommendationId: rec.id,
     visibleCast: Array.isArray(rec.visibleCast) ? rec.visibleCast : undefined,
+    // 오버레이 3형 후보(2026-09-15) — 확인·수정 팝업의 문구 후보 목록. visibleCast 와 같은 이유.
+    titleAlts: Array.isArray(rec.titleAlts) ? rec.titleAlts : undefined,
     beatIds: Array.isArray(rec.beatIds) ? rec.beatIds : [],
     reframe: basicReframeState(),
     // The AI's suggested destination (F3) — metadata only, still no render (§2.4). It seeds

@@ -3495,6 +3495,11 @@ _SHORTS_FROM_BEATS_SCHEMA = {
                         "items": {
                             "type": "OBJECT",
                             "properties": {
+                                # 유형 3형 고정 (2026-09-15 사용자 확정):
+                                #   name      실명형 — 화면 등장 **확인된** 인물명 ("고현정의 일침")
+                                #   quote     인용형 — 실 대사 그대로/약간 변형 ("지금 뭐라고?")
+                                #   situation 상황설명형 — 명사구 상황 요약 ("싸우는 자매")
+                                "kind": {"type": "STRING"},
                                 "title_line1": {"type": "STRING"},
                                 "title_line2": {"type": "STRING"},
                             },
@@ -3746,12 +3751,17 @@ title 은 폴백용 한 줄 · **title_line1 + title_line2** 를 필수로 뽑�
 
 title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
 
-**⭐ 대안 문구 (title_alts · 필수 2개) ⭐**:
-운영자가 나갈 문구를 **고를 수 있어야** 한다. title_line1/line2 말고 **다른 각도로 2쌍**을 더 뽑아
-title_alts 에 담는다 (기본 1 + 대안 2 = 최소 3개).
+**⭐ 대안 문구 (title_alts · 유형 3형 · 2026-09-15) ⭐**:
+운영자가 나갈 문구를 **고를 수 있어야** 한다. title_line1/line2 와 별개로, 아래 **세 유형을
+각 1쌍씩** title_alts 에 담는다. 각 항목에 kind 를 반드시 적는다.
+- kind "name" **실명형**: 이 쇼츠 구간의 characters_visible 에 있는 **화면 등장 확인 인물**의
+  이름을 주어로 쓴다. 예: "고현정의 일침" / "무너지는 표정". **characters_visible 에 없는
+  이름은 절대 쓰지 마라** — 확인된 인물이 없으면 이 유형은 아예 내지 않는다.
+- kind "quote" **인용형**: 이 구간의 실제 대사를 그대로 또는 살짝 다듬어 쓴다.
+  예: "지금 뭐라고 했어?" / "귀를 의심한 말". 지어낸 대사 금지 — 전사에 있는 말만.
+- kind "situation" **상황설명형**: 인물 이름 없이 상황을 명사구로 요약한다.
+  예: "싸우는 자매" / "밥상 뒤집힌 순간".
 - 길이 규칙은 기본과 **똑같이** 적용한다 (line1·line2 각 최대 12자 · 목표 8-11자).
-- **각도를 바꿔라.** 같은 말을 조사만 바꾼 것은 후보가 아니다 —
-  예: ① 반전 강조 ② 인물의 감정 ③ 질문형 처럼 접근을 달리한다.
 - 근거는 똑같이 이 쇼츠 구간 안에 있어야 한다. 지어내지 마라.
 
 **⭐ 첫 3초 Hook Intro (docs/plans/shorts-hook-intro-3sec.md) ⭐**:
@@ -3769,8 +3779,9 @@ title_alts 에 담는다 (기본 1 + 대안 2 = 최소 3개).
 {{"shorts":[
   {{"beat_ids":[3,4], "title":"헬스장 사장인 줄 알았는데 한마디에 스튜디오가 얼어붙었다",
     "title_line1":"헬스장 사장인 줄", "title_line2":"한마디에 얼어붙음", "title_line2_color":"yellow",
-    "title_alts":[{{"title_line1":"한의사였다고?", "title_line2":"스튜디오 정적"}},
-                  {{"title_line1":"자기소개 한마디", "title_line2":"모두 표정 굳음"}}],
+    "title_alts":[{{"kind":"name", "title_line1":"김도현의 폭탄 고백", "title_line2":"스튜디오 정적"}},
+                  {{"kind":"quote", "title_line1":"저 사실 한의사예요", "title_line2":"귀를 의심한 말"}},
+                  {{"kind":"situation", "title_line1":"자기소개 한마디에", "title_line2":"모두 표정 굳음"}}],
     "hook":"반전",
     "hook_quote":"저 사실 한의사예요", "hook_time_sec":2.4, "hook_intro_caption":"충격 고백!",
     "tags":["직업공개","한의사"],
@@ -3993,7 +4004,13 @@ title_alts 에 담는다 (기본 1 + 대안 2 = 최소 3개).
             if not (a1 or a2) or (a1, a2) in _seen_alt:
                 continue
             _seen_alt.add((a1, a2))
-            title_alts.append({"title_line1": a1, "title_line2": a2})
+            # 유형 딱지(2026-09-15 · name/quote/situation) — 검증·승격은 guard_title_result 의
+            # _guard_overlay_variants 가 한다(모든 추천 출구가 지나는 자리라 여기서 안 한다).
+            _kind = str(alt.get("kind") or "").strip().lower()
+            title_alts.append({
+                "title_line1": a1, "title_line2": a2,
+                **({"kind": _kind} if _kind in ("name", "quote", "situation") else {}),
+            })
         # 폴백: line1/2 없으면 title 로 자동 분할 (·|?|! 기준)
         if not (title_line1 and title_line2) and title:
             import re as _re_t

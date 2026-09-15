@@ -57,6 +57,7 @@ import {
 // 배치 픽커(레이아웃)는 템플릿 설정 다이얼로그(template-preview.tsx)로 이동 — RULE_ASPECTS·
 // ASPECT_PRESETS 도 거기서 읽는다(라벨 정본은 계속 편집기 프리셋).
 import { SlotPicker } from "@/components/automation/slot-picker";
+import { QuickEditDialog } from "@/components/automation/quick-edit-dialog";
 import {
   LayoutSliders,
   SUBTITLE_DEFAULTS,
@@ -310,6 +311,8 @@ export default function AutomationPage() {
   // 승인 대기 카드에서 렌더 결과를 펼쳐 보고 있는 클립. 하나만 — 여러 개가 동시에 재생되면
   // 소리가 겹치고 스크롤이 길어져서 "딱 보고 판단" 이 안 된다.
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
+  // 확인·수정 팝업(2026-09-15 목업) — 대기(이미 렌더된) 클립의 문구·배치를 그 자리에서 고친다.
+  const [quickEditClipId, setQuickEditClipId] = useState<string | null>(null);
   // 최근 처리·진행 접기 — 로그가 길어 기본은 접어 두고, 건수만 헤더에 보여준다.
   const [showActivity, setShowActivity] = useState(false);
 
@@ -1959,6 +1962,15 @@ export default function AutomationPage() {
                   >
                     {previewClipId === entry.clipId ? "미리보기 닫기" : "미리보기"}
                   </button>
+                  {/* 확인·수정(목업) — 문구 후보(3형)·배치만 고치는 가벼운 층. 저장 즉시 재렌더. */}
+                  <button
+                    type="button"
+                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                    disabled={!clip}
+                    onClick={() => setQuickEditClipId(entry.clipId)}
+                  >
+                    확인·수정
+                  </button>
                   {/* ⚠️ className 을 href **앞**에 둔다 — automation.test.ts 가 href 뒤 60자 안에서
                       `>편집<` 를 찾는다. 뒤에 두면 디자이너 클래스(200자)에 밀려 깨진다. */}
                   <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0" href={`/editor/${entry.clipId}`}>편집</Link>
@@ -2297,6 +2309,21 @@ export default function AutomationPage() {
 
       {/* 템플릿 설정 다이얼로그 — 부모 layout 상태를 공유해 컨트롤이 즉시 반영된다.
           레이아웃(세로 영상 배치)도 여기서 고른다(고급 설정에서 이동 · 2026-09-15). */}
+      {/* 확인·수정 팝업 — 대기(이미 렌더된) 클립의 문구 후보(3형)·배치를 그 자리에서. */}
+      {quickEditClipId && (() => {
+        const c = clips.find((x) => x.id === quickEditClipId);
+        return c ? (
+          <QuickEditDialog
+            clip={c}
+            onClose={() => setQuickEditClipId(null)}
+            onSaved={() => toast({
+              title: "저장 — 다시 굽는 중",
+              description: "이 영상만 다시 렌더합니다 (50~90초). 새 미리보기는 잠시 뒤 카드에서.",
+              tone: "done",
+            })}
+          />
+        ) : null;
+      })()}
       {tplPreviewOpen && layout && (
         <TemplatePreviewDialog
           template={templates.find((t) => t.name === effectiveTemplate) ?? null}

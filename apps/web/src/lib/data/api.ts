@@ -3013,6 +3013,37 @@ export interface FrameTemplate {
   overlayUrl: string;
 }
 
+/** 확인·수정 팝업(자동배포 대기 카드 · 2026-09-15 목업)의 오버레이 문구 읽기/저장. */
+export interface OverlayTitleLine {
+  id: string;
+  text: string;
+  color: string;
+}
+export interface OverlayTitleState {
+  titleLines: OverlayTitleLine[];
+  layout?: { aspect?: string | null };
+  rendered: boolean;
+}
+export async function fetchClipOverlayTitle(clipId: string): Promise<OverlayTitleState> {
+  return json(
+    await fetch(`${API_BASE}/clips/${clipId}/overlay-title`, { cache: "no-store" }),
+  );
+}
+/** 저장 즉시 서버가 이 클립만 다시 굽는다(50~90초). lines 는 **통째 교체**라 기존 줄의
+ *  색을 유지하려면 {text, color} 로 같이 보내야 한다 — 문자열만 보내면 강조색이 날아간다. */
+export async function patchClipOverlayTitle(
+  clipId: string,
+  body: { lines: Array<string | { text: string; color?: string }>; layout?: { aspect?: string } },
+): Promise<{ ok: boolean; rerender?: boolean }> {
+  return json(
+    await fetch(`${API_BASE}/clips/${clipId}/overlay-title`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
 export async function fetchShortsTemplates(): Promise<FrameTemplate[]> {
   const res = await fetch(`${API_BASE}/shorts-templates`, { cache: "no-store" });
   if (!res.ok) return [];
