@@ -2942,27 +2942,57 @@ app.patch("/api/programs/:id", async (c) => {
     else delete next.castPhotos;
   }
   if (Array.isArray(body.cast)) {
-    next.cast = body.cast.filter((x: unknown): x is string => typeof x === "string");
+    // 항목은 문자열(이름만 · 구 화면 호환) 또는 {name, aliases} — 출연진 카드가 배우명과
+    // 극중 이름을 한 자리에서 편집한다(2026-09-15 화면 합치기 · 로스터 의미론은
+    // reprojectTitleCast 와 동일: name=배우명 · aliases=극중 이름들).
+    const castEntries = (body.cast as unknown[])
+      .map((x) => {
+        if (typeof x === "string") return { name: x.trim(), aliases: undefined as string[] | undefined };
+        if (x && typeof x === "object" && typeof (x as { name?: unknown }).name === "string") {
+          const aliasesRaw = (x as { aliases?: unknown }).aliases;
+          return {
+            name: String((x as { name: string }).name).trim(),
+            aliases: Array.isArray(aliasesRaw)
+              ? aliasesRaw.map((a) => String(a).trim()).filter(Boolean)
+              : undefined,
+          };
+        }
+        return null;
+      })
+      .filter((e): e is { name: string; aliases: string[] | undefined } => !!e && !!e.name);
+    // program.cast 는 종전대로 이름 배열 — 프로필 프롬프트·화면 목록이 이 모양을 읽는다.
+    next.cast = castEntries.map((e) => e.name);
     // 이름 목록만 저장해도 별칭·사진·castId가 유지돼야 다음 분석의 인물 근거가 사라지지 않는다.
     const previousCast = await listProgramCast(id);
-    const keptNames = new Set((next.cast as string[]).map((name) => name.trim()).filter(Boolean));
+    const keptNames = new Set(castEntries.map((e) => e.name));
     for (const member of previousCast) {
       if (!keptNames.has(member.name)) await deleteCastMember(member.castId);
     }
-    for (const name of next.cast as string[]) {
-      const trimmed = name.trim();
-      if (!trimmed) continue;
-      if (previousCast.some((member) => member.name === trimmed)) continue;
+    for (const entry of castEntries) {
+      const existing = previousCast.find((member) => member.name === entry.name);
+      if (previousCast.some((member) => member.name === entry.name)) {
+        // 극중 이름이 딸려 왔고 저장분과 다르면 **같은 castId 로** 갱신한다 — 지웠다 다시
+        // 만들면 과거 타임라인의 castId 링크가 끊긴다(delete 라우트 주석과 같은 이유).
+        if (existing && entry.aliases !== undefined &&
+            JSON.stringify(entry.aliases) !== JSON.stringify(existing.aliases ?? [])) {
+          await upsertCastMember({
+            castId: existing.castId, programId: id, name: existing.name,
+            aliases: entry.aliases, role: existing.role ?? "", season: existing.season ?? "",
+            note: existing.note ?? "", imageUrl: existing.imageUrl ?? "",
+          });
+        }
+        continue;
+      }
       const castId = newId("cast");
       try {
-        await upsertCastMember({ 
-          castId, 
-          programId: id, 
-          name: trimmed,
-          aliases: [],
+        await upsertCastMember({
+          castId,
+          programId: id,
+          name: entry.name,
+          aliases: entry.aliases ?? [],
           role: "member",
           season: "",
-          note: ""
+          note: "",
         });
       } catch (e: any) {
         // (programId, name, season) unique · 중복이면 조용히 skip

@@ -383,3 +383,73 @@ describe("e2e — 도메인 폴더로 옮긴 라우트가 등록돼 있다", () 
     }
   });
 });
+
+describe("e2e — 출연진 카드 합치기 (배우명·극중 이름 · 2026-09-15)", () => {
+  // PATCH /api/programs/:id 의 body.cast 가 {name, aliases} 를 받아 로스터(별칭 포함)를
+  // 갱신하고 titleCast 를 되투영하는지 — 화면 카드 한 곳에서 편집이 끝나는 배선의 증명.
+  // 소스 스캔(title-names.test.ts)은 코드 모양만 보므로, 실제 DB 왕복은 여기서만 증명된다.
+  const OWNER = { email: "owner@cast.e2e", password: "cast-owner-pw" };
+  let programId = "";
+
+  before(async () => {
+    const admin = new Session();
+    await admin.login(SUPERADMIN.email, SUPERADMIN.password);
+    const { status, body } = await admin.post<{ id?: string }>("/api/superadmin/tenants", {
+      name: "출연진 방송", ownerEmail: OWNER.email, ownerPassword: OWNER.password, ownerName: "출연진 대표",
+    });
+    assert.equal(status, 200, `회사 개설 실패: ${JSON.stringify(body)}`);
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+    const created = await s.post<{ program?: { id?: string } }>("/api/programs", { title: "합치기 검증극" });
+    assert.equal(created.status, 200, `프로그램 생성 실패: ${JSON.stringify(created.body)}`);
+    programId = created.body.program?.id ?? "";
+    assert.ok(programId, "프로그램 id 가 없다");
+  });
+
+  it("{name, aliases} 저장 → 로스터에 별칭이 실리고 titleCast 가 되투영된다", async () => {
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+    const patched = await s.json<{ program?: { cast?: string[]; titleCast?: Array<{ actorName: string; characterNames: string[] }> } }>(
+      `/api/programs/${programId}`,
+      { method: "PATCH", body: JSON.stringify({ cast: [{ name: "김도현", aliases: ["민준", "강민준"] }, "이서연"] }) },
+    );
+    assert.equal(patched.status, 200, `PATCH 실패: ${JSON.stringify(patched.body)}`);
+    // program.cast 는 종전대로 이름 배열이어야 한다 — 프로필 프롬프트가 이 모양을 읽는다.
+    assert.deepEqual(patched.body.program?.cast, ["김도현", "이서연"]);
+
+    const roster = await s.json<{ cast: Array<{ name: string; aliases: string[] }> }>(`/api/programs/${programId}/cast`);
+    assert.equal(roster.status, 200);
+    const kim = roster.body.cast.find((m) => m.name === "김도현");
+    assert.ok(kim, "로스터에 김도현이 없다");
+    assert.deepEqual(kim!.aliases, ["민준", "강민준"], "극중 이름이 로스터 별칭에 안 실렸다");
+
+    // 되투영 — 오버레이 제목의 실명 치환은 titleCast 만 본다(ai/title-names.ts). 여기가 비면
+    // 화면은 됐다는데 제목엔 극중 이름이 그대로 나가는, 이 리포 최빈 실패모드가 된다.
+    const prog = await s.json<{ program?: { titleCast?: Array<{ actorName: string; characterNames: string[] }> } }>(
+      `/api/programs/${programId}`,
+    );
+    assert.equal(prog.status, 200);
+    const row = (prog.body.program?.titleCast ?? []).find((r) => r.actorName === "김도현");
+    assert.ok(row, "titleCast 에 김도현 되투영이 없다");
+    assert.deepEqual(row!.characterNames, ["민준", "강민준"]);
+  });
+
+  it("별칭만 바꿔 다시 저장하면 같은 castId 로 갱신된다 — 타임라인 링크가 안 끊긴다", async () => {
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+    const beforeRoster = await s.json<{ cast: Array<{ castId: string; name: string }> }>(`/api/programs/${programId}/cast`);
+    const beforeId = beforeRoster.body.cast.find((m) => m.name === "김도현")?.castId;
+    assert.ok(beforeId, "사전 로스터에 김도현이 없다");
+
+    const patched = await s.json(`/api/programs/${programId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ cast: [{ name: "김도현", aliases: ["민준"] }, "이서연"] }),
+    });
+    assert.equal(patched.status, 200);
+
+    const afterRoster = await s.json<{ cast: Array<{ castId: string; name: string; aliases: string[] }> }>(`/api/programs/${programId}/cast`);
+    const after = afterRoster.body.cast.find((m) => m.name === "김도현");
+    assert.deepEqual(after?.aliases, ["민준"]);
+    assert.equal(after?.castId, beforeId, "별칭 갱신이 행을 지웠다 새로 만들었다 — castId 가 바뀌면 과거 타임라인 링크가 끊긴다");
+  });
+});
