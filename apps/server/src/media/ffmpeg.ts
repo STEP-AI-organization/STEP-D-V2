@@ -834,22 +834,27 @@ function sourceBlurGraph(
   offsetSec: number,
   tag: string,
 ): string {
+  // ⚠️ split 은 **맨 앞에서 한 번에 평평하게**(split=N+1) 낸다. 예전엔 사각형마다 split 을
+  //    사슬로 끼웠는데(overlay→split→overlay→…), ffmpeg 8.x 가 17개+ 사슬에서 frame 0 도
+  //    못 내고 교착했다(2026-09-15 실클립 로컬 실측 · 프로덕션 이미지 ffmpeg 은 37개 통과 —
+  //    버전 따라 갈리는 지뢰라 모양 자체를 안전한 쪽으로). 출력은 동일하다.
   const parts: string[] = [];
-  let cur = inLabel;
+  const cropLabels = rects.map((_, i) => `[${tag}c${i}]`).join("");
+  parts.push(`${inLabel}split=${rects.length + 1}[${tag}m0]${cropLabels}`);
   rects.forEach((r, i) => {
     // 반경 상한은 **크로마 평면** 기준(min/4)이다 — yuv420 은 색차 평면이 절반 해상도라
     // boxblur 가 luma(min/2)보다 먼저 chroma 에서 죽는다. 실측(2026-09-15 프로덕션 실클립):
     // 예능 잔글씨 56×89 박스에서 "Invalid chroma_param radius value 17, must be <= 14".
     const cap = Math.max(1, Math.floor(Math.min(r.w, r.h) / 4));
     const rad = Math.min(Math.max(12, Math.floor(r.h / 5)), cap);
+    parts.push(`[${tag}c${i}]crop=${Math.round(r.w)}:${Math.round(r.h)}:${Math.round(r.x)}:${Math.round(r.y)},boxblur=${rad}:2[${tag}b${i}]`);
+  });
+  rects.forEach((r, i) => {
     const s = Math.max(0, r.start + offsetSec);
     const e = Math.max(0, r.end + offsetSec);
-    parts.push(`${cur}split[${tag}m${i}][${tag}c${i}]`);
-    parts.push(`[${tag}c${i}]crop=${Math.round(r.w)}:${Math.round(r.h)}:${Math.round(r.x)}:${Math.round(r.y)},boxblur=${rad}:2[${tag}b${i}]`);
-    parts.push(`[${tag}m${i}][${tag}b${i}]overlay=${Math.round(r.x)}:${Math.round(r.y)}:enable='between(t,${ffNum(s)},${ffNum(e)})'[${tag}o${i}]`);
-    cur = `[${tag}o${i}]`;
+    parts.push(`[${tag}m${i}][${tag}b${i}]overlay=${Math.round(r.x)}:${Math.round(r.y)}:enable='between(t,${ffNum(s)},${ffNum(e)})'[${tag}m${i + 1}]`);
   });
-  parts.push(`${cur}null${outLabel}`);
+  parts.push(`[${tag}m${rects.length}]null${outLabel}`);
   return parts.join(";");
 }
 
