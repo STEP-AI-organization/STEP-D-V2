@@ -1051,7 +1051,7 @@ function autoUploadGate(platform: string): { send: boolean; recordOnly: boolean;
  * dedupeKey 로 테넌트당 직렬이고, (2) /export 는 revision 캐시가 있어 이미 렌더된
  * 클립의 재요청은 재인코딩 없이 즉시 돌아온다.
  */
-async function requestAutoRender(clipId: string, channel?: string | null): Promise<RenderOutcome> {
+export async function requestAutoRender(clipId: string, channel?: string | null): Promise<RenderOutcome> {
   try {
     // ── 사무실 PC 로 넘기기 (RENDER_VIA_QUEUE · 기본 OFF) ──────────────────────
     // 렌더는 CPU 를 통째로 쓰는 유일한 일이라 노는 PC 로 옮길 값이 있다. 다만 그 PC 는

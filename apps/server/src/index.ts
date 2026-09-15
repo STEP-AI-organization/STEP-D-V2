@@ -373,7 +373,7 @@ import { clearAutoTopupAlert, maybeAutoTopup, topupAndRecheck } from "./billing/
 import { buyerFor, mailHtml, receiptExtrasFor, sendInvoiceEmail } from "./billing/invoice-email.ts";
 import { toKstIso } from "./kst.ts";
 import { commitAndInherit } from "./pipeline/adopt.ts";
-import { runAutomationCycle } from "./pipeline/automation-cycle.ts";
+import { runAutomationCycle, requestAutoRender } from "./pipeline/automation-cycle.ts";
 import { runHarvestCycle } from "./pipeline/harvest-cycle.ts";
 import {
   ROOT as ASSET_ROOT,
@@ -10284,10 +10284,35 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
   await putEntity("clip", clipId, {
     ...clip,
     editorState: { ...es, titleLines: nextLines },
-    // 다시 구워야 한다는 표시. 순방이 집어 간다 — 사용자는 아무것도 안 한다.
+    // 다시 구워야 한다는 표시. 아래에서 바로 굽고, 실패해도 순방이 안전망으로 다시 집어 간다.
     rendered: false,
   });
-  return c.json({ ok: true, titleLines: nextLines, rerender: true });
+
+  // ── 바로 굽는다 (2026-09-14 · 사용자 "굽는 건 재렌더 걸어야 할 듯, 순방 말고") ──────
+  //
+  // 예전엔 `rendered:false` 만 찍고 **순방을 기다렸다.** 두 가지가 나빴다:
+  //  ① 순방 주기가 10분이라 고친 사람이 최대 10분을 기다렸다.
+  //  ② 굽는 주체가 순방이라 **계획이 꺼져 있으면 아무도 안 구웠다** — 고쳐 놓고 영영
+  //     기다리는 상태가 된다(실측: 운영 규칙 6개 중 4개가 OFF).
+  //
+  // **응답은 기다리지 않는다.** 직접 경로(`/export`)는 ffmpeg 가 건당 50~90초라 여기서
+  // 기다리면 저장 버튼이 그만큼 멎는다. 요청이 실제로 나갈 시간만 주고 넘어간다 —
+  // `/export` 는 이 서비스로 들어오는 자기 요청이라 그 뒤로는 스스로 산다.
+  //
+  // 실패해도 던지지 않는다. `rendered:false` 가 남아 순방의 not_rendered 분기가 안전망으로
+  // 다시 굽고, 거기엔 실패 횟수·쿨다운 안전벨트(nextAutoRenderState)가 붙어 있다.
+  //
+  // ⚠️ 채널은 **클립이 지난번 렌더에 쓴 프리셋**(`renderPreset`)을 그대로 쓴다. 이건 배포처
+  //    길이 캡이라 빠뜨리면 규격보다 긴 영상이 나온다(2026-08-25 에 실제로 캡이 안 걸렸다).
+  //    순방처럼 계획에서 다시 고르지 않는 이유: 같은 클립을 같은 캡으로 굽는 게 목적이고,
+  //    계획을 되짚으면 그 사이 바뀐 배포처가 **길이만 다른 다른 영상**을 만든다.
+  void requestAutoRender(clipId, clip.renderPreset ?? null)
+    .catch((e) => console.warn(`[overlay-title] 즉시 렌더 요청 실패 ${clipId} (순방이 다시 시도한다):`,
+      e instanceof Error ? e.message : e));
+  // 요청이 나갈 틈만 준다(큐 경로면 이 안에 끝난다). 렌더 완료를 기다리는 게 아니다.
+  await new Promise((r) => setTimeout(r, 1200));
+
+  return c.json({ ok: true, titleLines: nextLines, rerender: true, renderRequested: true });
 });
 
 // ── export/render a clip → the single expensive render (plan §2.4) ────────────
