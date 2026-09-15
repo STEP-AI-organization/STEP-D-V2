@@ -441,6 +441,40 @@ function TextTab({ state, update, kf }: { state: EditorState; update: Update; kf
           ))}
         </div>
       </div>
+      {/* 제목 공통 스타일(2026-09-15) — 자간·행간·그림자는 줄이 아니라 제목 블록 전체 축이다
+          (서버 layoutTitleLines 가 es 레벨에서 읽는다). 자동배포 템플릿 설정과 같은 축·기본값. */}
+      <div>
+        <Label>자간 {(state.titleSpacing ?? 0).toFixed(1)}px <span className="text-zinc-500">(출력 px)</span></Label>
+        <input
+          type="range"
+          min={-10}
+          max={30}
+          step={0.5}
+          value={state.titleSpacing ?? 0}
+          onChange={(e) => update({ titleSpacing: Number(e.target.value) || undefined })}
+          className="w-full"
+        />
+      </div>
+      <div>
+        <Label>행간 {(state.titleLineHeight ?? 1.15).toFixed(2)}</Label>
+        <input
+          type="range"
+          min={0.8}
+          max={2}
+          step={0.05}
+          value={state.titleLineHeight ?? 1.15}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            update({ titleLineHeight: v === 1.15 ? undefined : v });
+          }}
+          className="w-full"
+        />
+      </div>
+      <Toggle
+        on={state.titleShadow !== false}
+        onChange={() => update({ titleShadow: state.titleShadow === false ? undefined : false })}
+        label="제목 그림자"
+      />
     </>
   );
 }
@@ -841,6 +875,20 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
           ))}
         </select>
       </div>
+      {/* 글꼴 — 미지정 = 렌더 기본(지마켓 산스 · 서버 captionAssStyle). id 는 서버 카탈로그와 1:1. */}
+      <div>
+        <Label>글꼴 <span className="text-zinc-500">(비우면 지마켓 산스)</span></Label>
+        <select
+          value={state.captionFont ?? ""}
+          onChange={(e) => update({ captionFont: e.target.value || undefined })}
+          className={field}
+        >
+          <option value="">기본 (지마켓 산스)</option>
+          {FONT_FAMILY_OPTIONS.map((f) => (
+            <option key={f.id} value={f.id}>{f.label}</option>
+          ))}
+        </select>
+      </div>
       {/* 세로 위치·색·크기 — 미리보기(editor-preview)와 렌더(index.ts buildEditorAss)가 **같은
           captionY/captionColor/captionSize 를 읽는다**. 예전엔 이 컨트롤이 없어 자동배포 설정만
           세팅할 수 있었다(사용자 2026-08-20: "위치·컬러 조정이 안 됨"). */}
@@ -885,6 +933,24 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
           className="w-full"
         />
       </div>
+      {/* 자간·그림자(2026-09-15) — 서버 ASS(\fsp · Shadow 0)와 같은 축. 미리보기도 같이 반영. */}
+      <div>
+        <Label>자간 {(state.captionSpacing ?? 0).toFixed(1)}px <span className="text-zinc-500">(출력 px)</span></Label>
+        <input
+          type="range"
+          min={-10}
+          max={30}
+          step={0.5}
+          value={state.captionSpacing ?? 0}
+          onChange={(e) => update({ captionSpacing: Number(e.target.value) || undefined })}
+          className="w-full"
+        />
+      </div>
+      <Toggle
+        on={state.captionShadow !== false}
+        onChange={() => update({ captionShadow: state.captionShadow === false ? undefined : false })}
+        label="자막 그림자"
+      />
       {/* 한 화면 글자수 — 세그먼트를 통째로 띄우면 쇼츠에선 4~5줄이 화면 절반을 덮는다.
           미리보기와 렌더가 같은 상한으로 끊는다(presets.ts / index.ts::chunkCaption). */}
       <div>

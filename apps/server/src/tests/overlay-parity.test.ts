@@ -290,9 +290,13 @@ describe("제목 2줄 — factory autoEditorState 가 titleLine1/2 시맨틱 분
       "두 줄이 모두 있을 때 wrapAutoTitle 로 재분할하면 안 된다 — 시맨틱 분할을 그대로 쓴다");
   });
 
-  it("무편집 제목은 첫 줄 106px·둘째 줄 107px 출력값을 쓴다", () => {
-    assert.match(FACTORY, /size: \(i === 0 \? 106 : 107\) \/ titleOutScale/,
-      "factory 제목 기본 크기가 106px·107px 출력값과 달라졌다");
+  it("무편집 제목은 첫 줄 106px·둘째 줄 107px 출력값 × 크기 배율(기본 1)을 쓴다", () => {
+    // 2026-09-15: 템플릿 설정의 제목 크기(%)가 배율(titleScale · 기본 1)로 곱해진다.
+    assert.match(FACTORY, /size: \(\(i === 0 \? 106 : 107\) \/ titleOutScale\) \* titleScale/,
+      "factory 제목 기본 크기가 106px·107px 출력값 × titleScale 과 달라졌다");
+    // 배율 미지정(구 계획)은 정확히 1 — 아니면 옛 계획의 제목 크기가 조용히 바뀐다.
+    assert.match(FACTORY, /Math\.min\(2, Math\.max\(0\.5, Number\(layoutOverride!\.titleSize\) \/ 100\)\) : 1/,
+      "titleSize 미지정 기본이 1(무회귀)이 아니다");
   });
 });
 
@@ -627,5 +631,107 @@ describe("채널 아이콘 끄기 — 토글·미리보기·렌더가 같은 값
   it("소비(렌더): 꺼져 있으면 아이콘 합성을 건너뛴다", () => {
     assert.match(SERVER, /if \(editorState\?\.showChannel && !editorState\?\.channelIconOff/,
       "렌더가 channelIconOff 를 안 보면 결과물에 아이콘이 그대로 박힌다");
+  });
+});
+
+/**
+ * 제목·자막 스타일 확장(2026-09-15 · 템플릿 설정) — 자간·행간·그림자가 **양쪽 미리보기와
+ * 렌더에서 같은 축**인지 고정한다. 새 축은 "화면만 바뀌고 결과물은 그대로"(최빈 실패모드)로
+ * 새기 쉬워, 생산(UI 필드) → 시드(factory) → 소비(PNG·ASS) 배선을 소스 스캔으로 잡아 둔다.
+ */
+describe("제목·자막 스타일(자간·행간·그림자) — 시드→렌더→미리보기 배선", () => {
+  it("렌더 정본(layoutTitleLines)이 titleSpacing·titleLineHeight 를 읽고 기본은 0·1.15", () => {
+    assert.match(SERVER, /Number\.isFinite\(Number\(es\.titleSpacing\)\) \? Number\(es\.titleSpacing\) : 0/,
+      "layoutTitleLines 가 titleSpacing 을 안 읽으면 자간 조절이 결과물에 미도달한다");
+    assert.match(SERVER, /lhRaw >= 0\.7 && lhRaw <= 2\.5 \? lhRaw : 1\.15/,
+      "행간 기본이 1.15(종전 하드코딩)가 아니면 옛 클립의 줄 간격이 조용히 바뀐다");
+  });
+
+  it("PNG 경로: 자간(letterSpacing)·그림자 토글이 canvas 아이템까지 간다", () => {
+    assert.match(SERVER, /\.\.\.\(L\.spacing \? \{ letterSpacing: L\.spacing \} : \{\}\)/,
+      "buildStaticOverlayItems 가 자간을 아이템에 안 실으면 PNG 제목만 자간이 빠진다");
+    assert.match(SERVER, /const titleShadowOn = \(es as any\)\.titleShadow !== false;/,
+      "제목 그림자 기본이 켬(!== false)이 아니면 옛 클립의 그림자가 사라진다");
+    assert.match(OVERLAY_CANVAS, /ctx\.letterSpacing = /,
+      "overlay-canvas 가 letterSpacing 을 안 그리면 아이템에 실어도 PNG 에 반영되지 않는다");
+  });
+
+  it("ASS 경로: 제목 \\fsp·\\shad0, 자막 \\fsp·Shadow 0 이 배선돼 있다", () => {
+    assert.match(SERVER, /\\\\fsp\$\{Math\.round\(L\.spacing\)\}/,
+      "ASS 제목(애니메이션/폴백)에 \\fsp 가 없으면 PNG 와 자간이 갈라진다");
+    assert.match(SERVER, /titleShadow === false \? "\\\\shad0" : ""/,
+      "ASS 제목 그림자 끄기(\\shad0)가 없으면 PNG(그림자 없음)와 이중 기준이 된다");
+    assert.match(SERVER, /const capSpacingInline = /, "자막 자간 인라인 태그 조립부가 없다");
+    const events = SERVER.match(/captionEv\.push\(`Dialogue:[^`]*`\)/g) ?? [];
+    assert.ok(events.length >= 2, "자막 이벤트 생성부를 못 찾았다");
+    for (const ev of events) {
+      assert.ok(ev.includes("${capSpacingInline}"),
+        `자막 이벤트에 capSpacingInline 이 없다 — 자간이 결과물에 미도달: ${ev.slice(0, 80)}`);
+    }
+    assert.match(SERVER, /const sh = \(n: number\) => \(shadowOff \? 0 : n\);/,
+      "captionAssStyle 그림자 토글(sh)이 없다 — 자막 그림자 끄기가 결과물에 미도달");
+    assert.match(SERVER, /\(es as any\)\.captionShadow === false\)/,
+      "buildEditorAss 가 captionShadow 를 captionAssStyle 로 안 넘긴다");
+  });
+
+  it("시드(factory): layoutOverride 의 스타일 필드가 editorState 로 옮겨진다", () => {
+    for (const pair of [
+      ["titleSpacing", "titleSpacing"], ["titleLineHeight", "titleLineHeight"],
+      ["subtitleSpacing", "captionSpacing"],
+    ] as const) {
+      assert.ok(FACTORY.includes(`layoutOverride.${pair[0]}`) && FACTORY.includes(`{ ${pair[1]}: layoutOverride.${pair[0]} }`),
+        `factory 가 layout.${pair[0]} 를 es.${pair[1]} 로 안 옮기면 저장은 되는데 렌더에 미도달한다`);
+    }
+    assert.match(FACTORY, /titleShadow === false \? \{ titleShadow: false \}/, "titleShadow=false 시드가 없다");
+    assert.match(FACTORY, /subtitleShadow === false \? \{ captionShadow: false \}/, "subtitleShadow=false 시드가 없다");
+  });
+
+  it("미리보기 3곳(에디터·자동배포)이 같은 기본 행간 1.15 를 쓴다", () => {
+    assert.match(WEB_PREVIEW, /state\.titleLineHeight \?\? 1\.15/,
+      "에디터 미리보기 행간 기본이 서버(1.15)와 다르면 편집 화면과 결과물의 줄 간격이 갈라진다");
+    assert.match(TPL, /lineHeight: 1\.15, shadow: true/,
+      "자동배포 TITLE_STYLE_DEFAULTS 행간 기본이 1.15 가 아니다 — 서버 layoutTitleLines 와 갈라진다");
+  });
+
+  // ── 소비(미리보기): 사용자가 만진 값이 **화면에서도 렌더와 같은 축으로** 그려진다 ──
+  // 미리보기가 안 읽으면 "슬라이더는 움직이는데 화면 그대로 → 결과물만 바뀜"(역방향 어긋남).
+  it("에디터 편집중 CSS 가 자간·그림자(제목/자막)를 읽는다", () => {
+    assert.match(WEB_PREVIEW, /state\.titleSpacing \? \{ letterSpacing: state\.titleSpacing \}/,
+      "에디터 제목 CSS 가 titleSpacing 을 안 읽으면 편집 중 자간이 화면에 안 보인다");
+    assert.match(WEB_PREVIEW, /state\.titleShadow === false \? \{\} : \{ textShadow:/,
+      "에디터 제목 CSS 가 titleShadow 를 안 읽으면 그림자 끔이 편집 중 화면에 안 보인다");
+    assert.match(WEB_PREVIEW, /state\.captionSpacing \? \{ letterSpacing: state\.captionSpacing \}/,
+      "에디터 자막 미리보기가 captionSpacing 을 안 읽는다");
+    assert.match(WEB_PREVIEW, /state\.captionShadow === false \? \{ textShadow: "none" \}/,
+      "에디터 자막 미리보기가 captionShadow 를 안 읽는다");
+  });
+
+  it("자동배포 미리보기가 스타일 전 축(크기·자간·행간·그림자·폰트)을 렌더와 같은 축으로 그린다", () => {
+    // 크기 배율 — factory titleScale 과 같은 클램프(0.5~2). 상수가 갈라지면 미리보기가
+    // 200% 를 그리는데 결과물은 다른 배율로 나간다.
+    assert.match(TPL, /Math\.min\(2, Math\.max\(0\.5, \(layout\.titleSize \?\? TITLE_STYLE_DEFAULTS\.size\) \/ 100\)\)/,
+      "자동배포 미리보기 크기 배율 클램프가 factory(0.5~2)와 다르다");
+    assert.match(FACTORY, /Math\.min\(2, Math\.max\(0\.5, Number\(layoutOverride!\.titleSize\) \/ 100\)\)/,
+      "factory 크기 배율 클램프(0.5~2)가 바뀌었다 — 미리보기(TPL)도 같이 바꿔야 한다");
+    // 자간 — 출력 px(1920 기준)를 미리보기 px 로 환산(÷1920×boxH). 환산 없이 그대로 쓰면
+    // 128px 소형 카드에서 자간이 15배로 보인다.
+    assert.match(TPL, /\(\(layout\.titleSpacing \?\? 0\) \/ 1920\) \* boxH/,
+      "자동배포 미리보기 제목 자간이 출력 px → 미리보기 px 환산을 안 한다");
+    assert.match(TPL, /\(\(layout\.subtitleSpacing \?\? 0\) \/ 1920\) \* boxH/,
+      "자동배포 미리보기 자막 자간이 출력 px → 미리보기 px 환산을 안 한다");
+    // 행간·그림자·폰트
+    assert.match(TPL, /lineHeight: layout\.titleLineHeight \?\? TITLE_STYLE_DEFAULTS\.lineHeight/,
+      "자동배포 미리보기가 titleLineHeight 를 안 읽는다");
+    assert.match(TPL, /layout\.titleShadow === false \? \{\} : \{ textShadow:/,
+      "자동배포 미리보기가 titleShadow 를 안 읽는다");
+    assert.match(TPL, /layout\.subtitleShadow === false \? \{\} : \{ textShadow:/,
+      "자동배포 미리보기가 subtitleShadow 를 안 읽는다");
+    assert.match(TPL, /fontFamily: fontFamilyCss\(layout\.titleFont\) \?\? "'GmarketSans', var\(--font-sans\)"/,
+      "자동배포 미리보기가 titleFont 를 안 읽는다 — 폰트를 골라도 미리보기는 지마켓 그대로");
+  });
+
+  it("에디터 idle PNG 재요청 키에 새 축이 들어 있다 — 없으면 '바꿨는데 미리보기 그대로'", () => {
+    assert.match(OVERLAY_PNG_HOOK, /sp: s\.titleSpacing \?\? 0, lh: s\.titleLineHeight \?\? 1\.15, sh: s\.titleShadow !== false/,
+      "overlayKey 에 자간·행간·그림자가 없으면 슬라이더를 움직여도 서버 PNG 가 재요청되지 않는다");
   });
 });

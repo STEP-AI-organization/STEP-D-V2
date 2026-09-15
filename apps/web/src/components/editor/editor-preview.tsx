@@ -575,6 +575,9 @@ export function EditorPreview({
             // Title-line keyframe x/y are offsets from the block layout (cqw/cqh = % of stage).
             const kf = sampleKeyframes(line.keyframes, localT);
             const lineShown = overlayVisibleAt(line, segT) || editing === key;
+            // 행간(기본 1.15)·자간(출력 px)·그림자 — 제목 스타일(2026-09-15). 서버 layoutTitleLines·
+            // buildStaticOverlayItems 가 같은 es 필드를 읽는다(어긋나면 편집 CSS 와 PNG 가 튄다).
+            const titleLh = state.titleLineHeight ?? 1.15;
             const font: CSSProperties = {
               color: line.color,
               // 크기 = line.size(출력 px) 그대로. 스테이지가 출력 해상도라 fit 하나가 서버 canvas-PNG
@@ -584,21 +587,26 @@ export function EditorPreview({
               fontWeight: 800,
               // 외곽선을 채움 아래로 — 제목 스트로크가 글자를 먹지 않게(자막과 동일 · 사용자 2026-08-20).
               paintOrder: "stroke fill",
-              lineHeight: 1.15,
-              // half-leading 보정 — CSS 라인박스(line-height 1.15)는 첫 줄 글자 상단을
-              // (lineHeight-1em)/2 = (1.15-1)/2 = 0.075em 만큼 anchor 위로 올린다. 반면 서버
+              lineHeight: titleLh,
+              // half-leading 보정 — CSS 라인박스(line-height lh)는 첫 줄 글자 상단을
+              // (lh-1em)/2 만큼 anchor 위로 올린다(기본 1.15 = 0.075em). 반면 서버
               // canvas 는 textBaseline:"top" 으로 anchor(y=titleY%·H)에 글자 상단을 그대로
               // 맞춘다(overlay-canvas.ts · index.ts buildStaticOverlayItems). 그래서 편집 CSS 가
-              // 렌더보다 0.075em 위에 뜬다 → 그만큼 아래로 내려 세로 정렬을 렌더와 맞춘다.
-              // (줄 advance 는 서버 round(fitPx*1.15) 와 동일하게 line-height 가 유지한다 — 이
+              // 렌더보다 그만큼 위에 뜬다 → 아래로 내려 세로 정렬을 렌더와 맞춘다.
+              // (줄 advance 는 서버 round(fitPx*lh) 와 동일하게 line-height 가 유지한다 — 이
               //  translateY 는 flow 를 건드리지 않는 순수 시각 보정이라 줄 간격은 그대로.)
-              transform: `translateY(${(1.15 - 1) / 2}em)`,
+              transform: `translateY(${(titleLh - 1) / 2}em)`,
+              // 자간 — 출력 px 그대로(서버 canvas letterSpacing · ASS \fsp 와 같은 축).
+              ...(state.titleSpacing ? { letterSpacing: state.titleSpacing } : {}),
               // 그림자·외곽선도 출력 px — 서버 canvas 는 offset/blur 를 scale(=opx) 배해 굽고, stroke
               // 는 출력 px 그대로다. 스테이지 fit 축소가 CSS·PNG 를 똑같이 줄인다.
-              textShadow: `0 ${opx(2)}px ${opx(6)}px rgba(0,0,0,.5)`,
+              // 그림자는 titleShadow === false 일 때만 끈다(렌더와 같은 기본 켬).
+              ...(state.titleShadow === false ? {} : { textShadow: `0 ${opx(2)}px ${opx(6)}px rgba(0,0,0,.5)` }),
               // 글꼴(font)·외곽선(stroke) — 편집 중(PNG 숨김) CSS 근사. 최종 진실은 서버 canvas-PNG
               // `<img>`(overlay-canvas.ts) 라 브라우저에 글꼴이 없어도 결과물은 정확하다.
-              ...(fontFamilyCss(line.font) ? { fontFamily: fontFamilyCss(line.font) } : {}),
+              // 미지정(font 없음)의 렌더 기본은 Pretendard ExtraBold(overlay-canvas 폴백) — 예전엔
+              // CSS 가 fontFamily 를 안 걸어 Outfit/Spoqa 로 보였다(2026-09-15 @font-face 추가로 일치).
+              fontFamily: fontFamilyCss(line.font) ?? "'Pretendard', var(--font-sans)",
               ...(line.stroke && line.stroke.width > 0
                 ? { WebkitTextStroke: `${line.stroke.width}px ${line.stroke.color}` }
                 : {}),
@@ -615,7 +623,7 @@ export function EditorPreview({
                     opacity: kf.opacity,
                     // kf.transform overrides the base, so re-apply the half-leading translateY
                     // (leftmost = constant downward nudge, unaffected by the kf scale/rotate).
-                    transform: `translateY(${(1.15 - 1) / 2}em) translate(${kf.x ?? 0}cqw, ${kf.y ?? 0}cqh) scale(${kf.scale}) rotate(${kf.rotation}deg)`,
+                    transform: `translateY(${(titleLh - 1) / 2}em) translate(${kf.x ?? 0}cqw, ${kf.y ?? 0}cqh) scale(${kf.scale}) rotate(${kf.rotation}deg)`,
                   }
                 : {}),
             };
@@ -675,14 +683,17 @@ export function EditorPreview({
                 // 자막 서체 = 지마켓 산스(사용자 확정 2026-08-28) — 서버 ASS(captionAssStyle 의
                 // `Gmarket Sans TTF`)와 같은 글꼴로 미리 보여야 "미리보기와 결과물이 다르다"가
                 // 안 생긴다. 굵기는 각 스타일의 Tailwind font-* 클래스가 정한다(@font-face 는
-                // 500·600~900 을 Medium·Bold 파일로 매핑).
-                fontFamily: "'GmarketSans', var(--font-sans)",
+                // 500·600~900 을 Medium·Bold 파일로 매핑). captionFont 를 고르면 그 글꼴로.
+                fontFamily: fontFamilyCss(state.captionFont) ?? "'GmarketSans', var(--font-sans)",
                 // 외곽선을 채움 **아래**로 — 노란 글자가 검은 스트로크에 먹혀 묻히지 않게(사용자 2026-08-20:
                 // "배경보다 레이어가 우선"). CSS 기본은 fill→stroke(스트로크가 글자 위 가운데로 덧그려져
                 // 얇은 글자를 먹는다)라, 서버 ASS(채움이 외곽선 위) 와 어긋났다. paint-order 로 맞춘다.
                 paintOrder: "stroke fill",
                 ...(typeof state.captionSize === "number" ? { fontSize: `${state.captionSize}cqh` } : {}),
                 ...(state.captionColor ? { color: state.captionColor } : {}),
+                // 자간(출력 px = 스테이지 px) · 그림자 끄기 — 서버 ASS(\fsp · Shadow 0)와 같은 축.
+                ...(state.captionSpacing ? { letterSpacing: state.captionSpacing } : {}),
+                ...(state.captionShadow === false ? { textShadow: "none" } : {}),
               };
               return (
                 <span className={cap.cls} style={capStyle}>

@@ -163,6 +163,18 @@
   src: url("/fonts/Recipekorea.woff2") format("woff2");
 }
 
+/* 프리텐다드 (2026-09-15) — 픽커 기본이자 렌더의 제목/자막 폴백 서체. 예전엔 css 가
+   var(--font-sans)(Outfit/Spoqa 근사)라 프리텐다드를 고르면 **미리보기만 다른 서체**로
+   보였다(렌더는 진짜 Pretendard ExtraBold). 렌더가 쓰는 것과 같은 ExtraBold 한 장(1.5MB
+   OTF · assets/fonts 원본과 동일 파일)만 싣는다 — 제목 800·자막 ASS 둘 다 이 웨이트다. */
+@font-face {
+  font-family: "Pretendard";
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/Pretendard-ExtraBold.otf") format("opentype");
+}
+
 /*
   Design tokens — 옛 프리미티브(components/ui/*)용.
 

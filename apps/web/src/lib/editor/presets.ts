@@ -437,6 +437,13 @@ export interface EditorState {
   titleAlign: "left" | "center" | "right";
   titleX: number; // %
   titleY: number; // %
+  // ── 제목 스타일 (2026-09-15 · 자동배포 템플릿 설정과 같은 축) ──────────────────
+  /** 제목 자간(출력 px · 기본 0). 서버 layoutTitleLines → PNG letterSpacing / ASS \fsp. */
+  titleSpacing?: number;
+  /** 제목 행간(배수 · 기본 1.15 — 서버 layoutTitleLines 의 adv 계수와 1:1). */
+  titleLineHeight?: number;
+  /** 제목 그림자 — 미지정 = 켬(종전과 동일). false 면 PNG·ASS 모두 그림자 없이 굽는다. */
+  titleShadow?: boolean;
   showChannel: boolean;
   channelName: string;
   channelY: number; // %
@@ -485,6 +492,12 @@ export interface EditorState {
   captionColor?: string;
   /** 자막 한 화면 최대 글자수. 미지정이면 CAPTION_CHUNK_MAX_CHARS(18). 서버 렌더도 같은 키를 읽는다. */
   captionMaxChars?: number;
+  /** 자막 글꼴(카탈로그 id · 서버 ASS_FONT_BY_ID). 미지정 = 렌더 기본(지마켓 산스). */
+  captionFont?: string;
+  /** 자막 자간(출력 px · ASS \fsp). 기본 0. */
+  captionSpacing?: number;
+  /** 자막 그림자 — 미지정 = 켬(스타일 기본). false 면 ASS Shadow 0. */
+  captionShadow?: boolean;
   showSafeArea: boolean;
   elements: EditorElement[];
   trimIn: number; // seconds
@@ -642,7 +655,9 @@ export interface FontFamilyOption {
   css: string;
 }
 export const FONT_FAMILY_OPTIONS: FontFamilyOption[] = [
-  { id: "pretendard", label: "프리텐다드", css: "var(--font-sans)" },
+  // 2026-09-15: 근사(var(--font-sans))에서 실서체로 — 렌더(Pretendard ExtraBold)와 같은 파일을
+  // @font-face 로 싣는다. 프리텐다드를 골랐을 때 미리보기만 Outfit/Spoqa 로 보이던 어긋남 제거.
+  { id: "pretendard", label: "프리텐다드", css: "'Pretendard', var(--font-sans)" },
   { id: "gmarket", label: "지마켓 산스", css: "'GmarketSans', var(--font-sans)" },
   { id: "blackhansans", label: "검은고딕", css: "'Black Han Sans', var(--font-sans)" },
   { id: "dohyeon", label: "도현", css: "'Do Hyeon', var(--font-sans)" },
@@ -932,6 +947,20 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
       typeof state.captionMaxChars === "number" && state.captionMaxChars >= 6
         ? Math.round(state.captionMaxChars)
         : undefined,
+    // 자막 스타일(2026-09-15) — 미지정 = 렌더 기본. 오염값(비수치)은 버린다.
+    captionFont: typeof state.captionFont === "string" && state.captionFont ? state.captionFont : undefined,
+    captionSpacing:
+      typeof state.captionSpacing === "number" && Number.isFinite(state.captionSpacing) && state.captionSpacing !== 0
+        ? state.captionSpacing : undefined,
+    captionShadow: state.captionShadow === false ? false : undefined,
+    // 제목 스타일 — 자간(출력 px)·행간(배수 · 서버와 같은 0.7~2.5 밖은 기본으로)·그림자.
+    titleSpacing:
+      typeof state.titleSpacing === "number" && Number.isFinite(state.titleSpacing) && state.titleSpacing !== 0
+        ? state.titleSpacing : undefined,
+    titleLineHeight:
+      typeof state.titleLineHeight === "number" && state.titleLineHeight >= 0.7 && state.titleLineHeight <= 2.5
+        ? state.titleLineHeight : undefined,
+    titleShadow: state.titleShadow === false ? false : undefined,
     // 종횡비 — 구형 저장분(bare "9:16" + fit + bgType, 1:1/4:5)을 5-값 enum 으로 승격.
     // aspect-presets.normalizeAspectPreset 이 결과물 무회귀 등가로 접는다(cover→꽉채우기,
     // contain→레터박스, blur 는 레터박스 하위옵션으로만 유지). 이미 enum 이면 그대로.

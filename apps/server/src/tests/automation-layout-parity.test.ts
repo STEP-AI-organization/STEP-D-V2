@@ -41,7 +41,10 @@ describe("자동배포 layout — 화면 필드가 저장 화이트리스트에 
     const typeBlock = /layoutOverride\?: \{([\s\S]*?)\}/.exec(factory)?.[1];
     assert.ok(typeBlock, "factory.ts 에서 layoutOverride 타입을 못 찾았다");
     for (const field of ["titleY", "channelIconY", "channelBoxY", "channelIconSize",
-      "titleColor", "subtitleY", "subtitleSize", "subtitleColor", "title", "logo", "timebox"]) {
+      "titleColor", "subtitleY", "subtitleSize", "subtitleColor", "title", "logo", "timebox",
+      // 제목·자막 스타일 (2026-09-15 템플릿 설정 확장)
+      "titleFont", "captionFont", "titleSize", "titleSpacing", "titleLineHeight", "titleShadow",
+      "subtitleSpacing", "subtitleShadow"]) {
       assert.ok(typeBlock!.includes(field), `factory layoutOverride 에 '${field}' 가 없다`);
     }
   });
