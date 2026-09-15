@@ -30,6 +30,7 @@ import {
   fetchChannelRules,
   saveChannelRule,
 } from "@/lib/data/api";
+import { ChannelFooterEditor } from "@/components/publish/channel-footer-editor";
 import { NaverAccounts } from "@/components/publish/naver-accounts";
 import { CoupangAccount } from "@/components/publish/coupang-account";
 import { ChannelAnalysis } from "@/components/channel-analysis";
@@ -523,7 +524,8 @@ export default function PublishChannelsPage() {
                 </div>
 
                 {metaAccounts.map((a) => (
-                  <div key={a.publicId} className={`${ROW_GRID} px-3 py-3`}>
+                  <div key={a.publicId} className="py-1">
+                  <div className={`${ROW_GRID} px-3 py-2`}>
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border-none bg-[var(--color-bg-input)] flex items-center justify-center">
                         {a.pageProfilePictureUrl ? (
@@ -564,6 +566,13 @@ export default function PublishChannelsPage() {
                         삭제
                       </button>
                     </div>
+                  </div>
+                  <ChannelFooterEditor
+                    platform="facebook"
+                    accountId={a.pageId}
+                    rule={channelRules[`facebook:${a.pageId}`]}
+                    onSaved={(r) => setChannelRules((prev) => ({ ...prev, [`facebook:${a.pageId}`]: r }))}
+                  />
                   </div>
                 ))}
               </div>
@@ -611,7 +620,8 @@ export default function PublishChannelsPage() {
                   const expiringSoon = Boolean(a.expiresAt) && !expired
                     && Number(a.expiresAt) - Date.now() < 7 * 24 * 60 * 60 * 1000;
                   return (
-                    <div key={a.publicId} className={`${ROW_GRID} px-3 py-3`}>
+                    <div key={a.publicId} className="py-1">
+                    <div className={`${ROW_GRID} px-3 py-2`}>
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border-none bg-[var(--color-bg-input)] flex items-center justify-center">
                           {a.profilePictureUrl ? (
@@ -655,6 +665,13 @@ export default function PublishChannelsPage() {
                         </button>
                       </div>
                     </div>
+                    <ChannelFooterEditor
+                      platform="instagram"
+                      accountId={a.igUserId}
+                      rule={channelRules[`instagram:${a.igUserId}`]}
+                      onSaved={(r) => setChannelRules((prev) => ({ ...prev, [`instagram:${a.igUserId}`]: r }))}
+                    />
+                    </div>
                   );
                 })}
               </div>
@@ -697,7 +714,8 @@ export default function PublishChannelsPage() {
                 </div>
 
                 {tiktokAccounts.map((a) => (
-                  <div key={a.publicId} className={`${ROW_GRID} px-3 py-3`}>
+                  <div key={a.publicId} className="py-1">
+                  <div className={`${ROW_GRID} px-3 py-2`}>
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border-none bg-[var(--color-bg-input)] flex items-center justify-center">
                         {a.avatarUrl ? (
@@ -741,6 +759,14 @@ export default function PublishChannelsPage() {
                         삭제
                       </button>
                     </div>
+                  </div>
+                  {/* 틱톡은 설명란이 없다 — 고정 문구가 캡션(제목) 끝에 붙는다. 짧게. */}
+                  <ChannelFooterEditor
+                    platform="tiktok"
+                    accountId={a.openId}
+                    rule={channelRules[`tiktok:${a.openId}`]}
+                    onSaved={(r) => setChannelRules((prev) => ({ ...prev, [`tiktok:${a.openId}`]: r }))}
+                  />
                   </div>
                 ))}
               </div>
@@ -859,6 +885,13 @@ export default function PublishChannelsPage() {
                               </div>
                             </div>
                           )}
+                          {/* 설명 고정 문구 — 이 채널로 나가는 발행 설명 맨 아래에 항상 붙는 글. */}
+                          <ChannelFooterEditor
+                            platform="youtube"
+                            accountId={ch.channelId}
+                            rule={rule}
+                            onSaved={(r) => setChannelRules((prev) => ({ ...prev, [`youtube:${ch.channelId}`]: r }))}
+                          />
                           <ChannelAnalysis channelId={ch.channelId} />
                         </div>
                       )}

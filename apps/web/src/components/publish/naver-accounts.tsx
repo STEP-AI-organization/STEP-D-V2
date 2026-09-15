@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Download } from "lucide-react";
+import { ChannelFooterEditor } from "@/components/publish/channel-footer-editor";
 import { NaverCredentials } from "@/components/publish/naver-credentials";
 import type { NaverAccount } from "@/lib/data/api";
 import {
@@ -354,6 +355,13 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
                 {/* Expandable Detail Sub-Drawer */}
                 {open && (
                   <div className="mt-3 p-3.5 rounded-xl bg-[var(--color-bg-input)]/50 border border-[var(--color-border-subtle)] space-y-2 animate-in fade-in duration-150 text-xs">
+                    {/* 설명 고정 문구 — 이 계정으로 나가는 발행 설명 맨 아래에 항상 붙는 글.
+                        이 컴포넌트는 채널 규칙 맵을 안 들고 있어 selfLoad 로 직접 읽는다. */}
+                    <ChannelFooterEditor
+                      platform={a.target === "tv" ? "navertv" : "naverclip"}
+                      accountId={a.id}
+                      selfLoad
+                    />
                     {/* 자동 로그인(아이디·비번) — 세션 만료마다 사람이 붙는 걸 없애는 자리. */}
                     <NaverCredentials
                       accountId={a.id}

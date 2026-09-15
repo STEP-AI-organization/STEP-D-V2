@@ -37,6 +37,7 @@ const rule = (over: Partial<ChannelRule> = {}): ChannelRule => ({
   aspect: "any",
   titlePrefix: "",
   hashtagTemplate: "",
+  descriptionFooter: "",
   tonePreset: "기본",
   privacy: "public",
   scheduleWindow: "",

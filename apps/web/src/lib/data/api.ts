@@ -478,9 +478,6 @@ export interface CreateProgramInput {
   titleCast?: Array<{ actorName: string; characterNames: string[] }>;
   /** 추천(BEAT 조합) 추가 지시. "" = 필드 삭제(지시 없음 복귀). */
   recommendPrompt?: string;
-  /** 배포 설명 고정 문구 — 발행 직전 설명 아래에 자동 부착(서버 publish/description-footer.ts).
-   *  "" = 필드 삭제(고정 문구 없음). */
-  descriptionFooter?: string;
   // ── 편성 상태 · 담당 · 권리 윈도우 (FLOWS F10 · 2026-08-10) ──────────────
   /** 방영 중/종영/편성 예정. 사람이 지정한다 — 날짜로 자동 판정하지 않는다. */
   status?: ProgramStatus;
@@ -1650,6 +1647,9 @@ export interface ChannelPublishTarget {
   aspect: "9:16" | "16:9" | "any";
   titlePrefix: string;
   hashtagTemplate: string;
+  /** 배포 설명 고정 문구 — 발행 직전, 생성 설명 아래·커머스 블록 위에 붙는 **채널 단위** 고정글.
+   *  언어·플랫폼마다 다르게(인니어 자막 안내 등 · 틱톡은 캡션 꼬리표). "" = 없음. */
+  descriptionFooter?: string;
   tonePreset: string;
   privacy: "public" | "unlisted" | "private";
   /** 공개 유예(분) — 자동 게시를 이만큼 비공개로 잡아뒀다 공개한다. 0 = 즉시.

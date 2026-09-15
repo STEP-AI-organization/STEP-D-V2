@@ -3481,6 +3481,8 @@ export interface ChannelRuleRow {
   aspect: string;
   titlePrefix: string;
   hashtagTemplate: string;
+  /** 배포 설명 고정 문구 — 발행 직전 설명 아래에 붙는 채널 단위 고정글(migrations/0058). */
+  descriptionFooter: string;
   tonePreset: string;
   privacy: string;
   scheduleWindow: string;
@@ -3491,6 +3493,7 @@ export interface ChannelRuleRow {
 
 const RULE_COLS = `platform, account_id AS "accountId", label, role, max_sec AS "maxSec",
   aspect, title_prefix AS "titlePrefix", hashtag_template AS "hashtagTemplate",
+  description_footer AS "descriptionFooter",
   tone_preset AS "tonePreset", privacy, schedule_window AS "scheduleWindow", enabled,
   publish_delay_min AS "publishDelayMin"`;
 
@@ -3513,17 +3516,17 @@ export async function upsertChannelRule(r: ChannelRuleRow): Promise<void> {
   await pool.query(
     `INSERT INTO channel_rule
        (platform, account_id, label, role, max_sec, aspect, title_prefix, hashtag_template,
-        tone_preset, privacy, schedule_window, enabled, publish_delay_min, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+        tone_preset, privacy, schedule_window, enabled, publish_delay_min, description_footer, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
      -- 0021 이후 PK = (tenant_id, platform, account_id) — 옛 대상이면 "no unique constraint" 로 죽는다
      ON CONFLICT (tenant_id, platform, account_id) DO UPDATE SET
        label = $3, role = $4, max_sec = $5, aspect = $6, title_prefix = $7,
        hashtag_template = $8, tone_preset = $9, privacy = $10, schedule_window = $11,
-       enabled = $12, publish_delay_min = $13, updated_at = now()`,
+       enabled = $12, publish_delay_min = $13, description_footer = $14, updated_at = now()`,
     [
       r.platform, r.accountId, r.label, r.role, r.maxSec, r.aspect, r.titlePrefix,
       r.hashtagTemplate, r.tonePreset, r.privacy, r.scheduleWindow, r.enabled,
-      r.publishDelayMin,
+      r.publishDelayMin, r.descriptionFooter ?? "",
     ],
   );
 }
