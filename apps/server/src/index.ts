@@ -10439,6 +10439,10 @@ app.get("/api/clips/:id/overlay-title", async (c) => {
       // 배치 — editorState.aspect 가 정본이고, 없으면 클립에 기록된 렌더 결과 화면비를 보여준다
       // (`/export` 가 굽고 나서 clip.aspectRatio 에 남긴다). 둘 다 없으면 템플릿이 정한다.
       aspect: String(es.aspect ?? clip.aspectRatio ?? ""),
+      // 자간·행간 — 규칙 layout 과 같은 어휘·단위(자간은 출력 px · 행간은 배수).
+      titleSpacing: typeof es.titleSpacing === "number" ? es.titleSpacing : null,
+      titleLineHeight: typeof es.titleLineHeight === "number" ? es.titleLineHeight : null,
+      subtitleSpacing: typeof es.captionSpacing === "number" ? es.captionSpacing : null,
     },
   });
 });
@@ -10551,6 +10555,18 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
     // ⚠️ 배치를 바꾸면 **영상 잘리는 모양이 통째로 달라진다.** 글자만 다시 얹는 게 아니라
     //    크롭부터 다시 계산하므로, 콘솔은 "다시 구운 뒤에 반영된다" 를 사람에게 말해야 한다.
     if (isAspectId(lay.aspect)) esPatch.aspect = lay.aspect;
+    // ── 자간·행간 (#45 가 렌더 축을 깔아 둔 것을 **클립 단위로** 연다) ──────────
+    // 어휘·단위는 규칙 layout 과 같다(factory 의 `layoutOverride` 주석이 정본):
+    //   titleSpacing     자간(**출력 px** · 기본 0)  → es.titleSpacing
+    //   titleLineHeight  행간(배수 · 기본 1.15)      → es.titleLineHeight
+    //   subtitleSpacing  자막 자간(출력 px)          → es.captionSpacing
+    // ⚠️ 자간은 폭 측정(layoutTitleLines)에 더해져 shrink-to-fit 에 반영된다 — 그래서 값을
+    //    키우면 글자가 넘치는 게 아니라 **폰트가 작아진다**. 사람에겐 그게 더 안전하다.
+    // ⚠️ `titleSize`(크기 배율)는 여기 없다 — 그건 **공장이 시드 px 에 곱하는 값**이라
+    //    이미 만들어진 클립엔 뜻이 없다. 클립의 크기는 줄의 `size` 로 고친다.
+    put("titleSpacing", num(lay.titleSpacing, 200));
+    put("titleLineHeight", num(lay.titleLineHeight, 3));
+    put("captionSpacing", num(lay.subtitleSpacing, 200));
   }
 
   await putEntity("clip", clipId, {
