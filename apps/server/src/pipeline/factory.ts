@@ -733,8 +733,19 @@ export function autoEditorState(
     titleSize?: number; titleSpacing?: number; titleLineHeight?: number; titleShadow?: boolean;
     /** 자막 스타일 — 자간(출력 px)·그림자. es.captionSpacing / es.captionShadow 로 옮긴다. */
     subtitleSpacing?: number; subtitleShadow?: boolean;
+    /**
+     * 자막 상세 스타일 (2026-09-15 · AENA 통합목업 "자막 스타일" 절):
+     *  - subtitleStroke(false=끔)·subtitleStrokeColor → es.captionStroke/captionStrokeColor
+     *  - subtitleBg(true=박스)·subtitleBgColor·subtitleBgOpacity(0~100) → es.captionBg*
+     *  - subtitleShadowX/Y(출력 px) → es.captionShadowX/Y (ASS \xshad·\yshad)
+     */
+    subtitleStroke?: boolean; subtitleStrokeColor?: string;
+    subtitleBg?: boolean; subtitleBgColor?: string; subtitleBgOpacity?: number;
+    subtitleShadowX?: number; subtitleShadowY?: number;
     /** 방영시간 박스 배경색(#RRGGBB). */
     channelBoxColor?: string;
+    /** 시간박스 스타일(목업 "시간박스" 절) — 글꼴(카탈로그 id)·배경색·크기(%). */
+    timeboxFont?: string; timeboxColor?: string; timeboxSize?: number;
     /**
      * 배포 언어 코드 (기본 `ko` · 2026-09-07 다국어 배포).
      *
@@ -910,11 +921,42 @@ export function autoEditorState(
     ...(FONT_FAMILIES.some((f) => f.id === layoutOverride?.captionFont)
       ? { captionFont: snapFont(String(layoutOverride?.captionFont), lang) }
       : isForeign(lang) ? { captionFont: lang.allowFonts[0] } : {}),
+    // 자막 상세 스타일(2026-09-15 · 목업 "자막 스타일" 절) — 미지정은 필드 자체를 안 실어
+    // 종전 모양 그대로다(무회귀). 소비처: index.ts captionAssStyle(스타일 행) + 자막 이벤트
+    // 인라인 태그(\xshad·\yshad). 미리보기(template-preview)가 같은 값을 CSS 로 그린다.
+    ...(layoutOverride?.subtitleStroke === false ? { captionStroke: false } : {}),
+    ...(layoutOverride && typeof layoutOverride.subtitleStrokeColor === "string"
+      && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.subtitleStrokeColor)
+      ? { captionStrokeColor: layoutOverride.subtitleStrokeColor } : {}),
+    ...(layoutOverride?.subtitleBg === true ? {
+      captionBg: true,
+      ...(typeof layoutOverride.subtitleBgColor === "string"
+        && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.subtitleBgColor)
+        ? { captionBgColor: layoutOverride.subtitleBgColor } : {}),
+      ...(Number.isFinite(layoutOverride.subtitleBgOpacity)
+        ? { captionBgOpacity: Math.min(100, Math.max(0, Number(layoutOverride.subtitleBgOpacity))) } : {}),
+    } : {}),
+    // 그림자 오프셋 — 한 축이라도 정했으면 **쌍으로** 싣는다(ASS \xshad·\yshad 는 축별
+    // 오버라이드라 한 축만 실으면 나머지가 프리셋 깊이로 남아 대각선이 어긋난다).
+    ...(layoutOverride && (Number.isFinite(layoutOverride.subtitleShadowX) || Number.isFinite(layoutOverride.subtitleShadowY))
+      ? {
+          captionShadowX: Number.isFinite(layoutOverride.subtitleShadowX) ? Number(layoutOverride.subtitleShadowX) : 0,
+          captionShadowY: Number.isFinite(layoutOverride.subtitleShadowY) ? Number(layoutOverride.subtitleShadowY) : 2,
+        } : {}),
     // 방영시간 박스 색 — 렌더(index.ts BoxLabel)가 es.channelBoxColor 를 읽는데 자동배포
     // 경로에서만 전달이 빠져 있었다(화면에서 고를 수 없던 이유).
     ...(layoutOverride && typeof layoutOverride.channelBoxColor === "string"
       && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.channelBoxColor)
       ? { channelBoxColor: layoutOverride.channelBoxColor } : {}),
+    // 시간박스 스타일(목업 "시간박스" 절) — timeboxColor 는 channelBoxColor 와 같은 자리로
+    // 접는다(둘 다 오면 timebox* 가 이긴다 — 목업 이후 화면은 timebox* 만 보낸다).
+    ...(layoutOverride && typeof layoutOverride.timeboxColor === "string"
+      && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.timeboxColor)
+      ? { channelBoxColor: layoutOverride.timeboxColor } : {}),
+    ...(FONT_FAMILIES.some((f) => f.id === layoutOverride?.timeboxFont)
+      ? { channelBoxFont: String(layoutOverride?.timeboxFont) } : {}),
+    ...(layoutOverride && Number.isFinite(layoutOverride.timeboxSize) && Number(layoutOverride.timeboxSize) !== 100
+      ? { channelBoxScale: Math.min(2, Math.max(0.5, Number(layoutOverride.timeboxSize) / 100)) } : {}),
   };
 }
 

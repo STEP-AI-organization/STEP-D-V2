@@ -1175,6 +1175,21 @@ export interface AutomationRule {
     subtitleSpacing?: number;
     /** 자막 그림자 — 미지정 = 켬(스타일 기본). */
     subtitleShadow?: boolean;
+    // ── 자막 상세·시간박스 (2026-09-15 · AENA 통합목업 · LayoutState 와 1:1) ──────
+    /** 자막 그림자 오프셋(출력 px · ASS \xshad·\yshad). 미지정 = 프리셋 깊이. */
+    subtitleShadowX?: number;
+    subtitleShadowY?: number;
+    /** 자막 외곽선 — false 만 의미(끔). 색 미지정 = 프리셋(검정). */
+    subtitleStroke?: boolean;
+    subtitleStrokeColor?: string;
+    /** 자막 배경 박스(true 일 때만 색·불투명도 의미 · 불투명도 0~100 기본 60). */
+    subtitleBg?: boolean;
+    subtitleBgColor?: string;
+    subtitleBgOpacity?: number;
+    /** 시간박스 — 글꼴(카탈로그 id)·배경색(#RRGGBB · 기본 #3D7BD9)·크기(% · 기본 100). */
+    timeboxFont?: string;
+    timeboxColor?: string;
+    timeboxSize?: number;
   };
   /**
    * 자동 생성 숏폼의 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계.
