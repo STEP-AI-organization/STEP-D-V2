@@ -148,14 +148,16 @@ function ProgramDetailInner({
   // AI 프롬프트 2종 — 저장 시 trim 해서 보내고, 빈 값은 "" 그대로 → 서버가 필드를 삭제한다
   // (pipelineGenre 와 같은 시맨틱). 반영은 다음 분석부터라 화면에 그렇게 말해 준다.
   const [titlePrompt, setTitlePrompt] = useState(program.titlePrompt ?? "");
-  const [titleCastText, setTitleCastText] = useState(
-    (program.titleCast ?? []).map((m) => `${m.characterNames.join(", ")} = ${m.actorName}`).join("\n"),
-  );
+  // 극중 이름(배우명 키). 저장된 titleCast(로스터의 투영 — name=배우명·aliases=극중 이름들)에서
+  // 초기화하고, 저장 시 cast 항목의 aliases 로 실어 보낸다. 별도 대응표 textarea 는 이 카드에
+  // 합쳐졌다(2026-09-15) — 서버가 로스터에서 titleCast 를 되투영하므로 따로 보내지 않는다.
+  const [castAliases, setCastAliases] = useState<Record<string, string>>(aliasesFromTitleCast(program.titleCast));
   const [recommendPrompt, setRecommendPrompt] = useState(program.recommendPrompt ?? "");
   const [moods, setMoods] = useState<string[]>(program.moods ?? []);
   const [newMood, setNewMood] = useState("");
-  const [cast, setCast] = useState<string[]>(program.cast ?? []);
+  const [cast, setCast] = useState<string[]>(castWithTitleCastActors(program.cast, program.titleCast));
   const [newName, setNewName] = useState("");
+  const [newAlias, setNewAlias] = useState("");
   const [castPhotos, setCastPhotos] = useState<Record<string, string>>(program.castPhotos ?? {});
   // ⚠️ **base64 원본은 `/api/state` 에 없다**(응답 크기 때문에 서버가 뺀다) — 이 화면만
   // `GET /api/programs/:id` 로 따로 받는다. 받기 전에 저장하면 서버 PATCH 가 빈 문자열을
@@ -220,10 +222,10 @@ function ProgramDetailInner({
     setSpinoff(program.spinoff ?? "");
     setAwards(program.awards ?? "");
     setTitlePrompt(program.titlePrompt ?? "");
-    setTitleCastText((program.titleCast ?? []).map((m) => `${m.characterNames.join(", ")} = ${m.actorName}`).join("\n"));
+    setCastAliases(aliasesFromTitleCast(program.titleCast));
     setRecommendPrompt(program.recommendPrompt ?? "");
     setMoods(program.moods ?? []);
-    setCast(program.cast ?? []);
+    setCast(castWithTitleCastActors(program.cast, program.titleCast));
     setCastPhotos(program.castPhotos ?? {});
   }, [
     program.id, program.title, program.section, program.targetAge,
@@ -275,15 +277,40 @@ function ProgramDetailInner({
       return;
     }
     setCast([...cast, v]);
+    const alias = newAlias.trim();
+    if (alias) setCastAliases({ ...castAliases, [v]: alias });
     setNewName("");
+    setNewAlias("");
     setTimeout(() => document.getElementById("new-cast-input")?.focus(), 0);
   }
   function removeCast(name: string) {
     setCast(cast.filter((c) => c !== name));
-    // 해당 인물의 사진 매핑도 함께 제거
+    // 해당 인물의 사진·극중 이름 매핑도 함께 제거
     if (castPhotos[name]) {
       const { [name]: _drop, ...rest } = castPhotos;
       setCastPhotos(rest);
+    }
+    if (castAliases[name] !== undefined) {
+      const { [name]: _drop, ...rest } = castAliases;
+      setCastAliases(rest);
+    }
+  }
+  // 배우명 변경 — 사진·극중 이름이 이름을 키로 매달려 있어 같이 옮긴다.
+  function renameCast(oldName: string, nextRaw: string) {
+    const nextName = nextRaw.trim();
+    if (!nextName || nextName === oldName) return;
+    if (cast.includes(nextName)) {
+      onOpenToast({ title: "이미 등록됨", description: `${nextName} 은(는) 이미 명단에 있음`, tone: "warn" });
+      return;
+    }
+    setCast(cast.map((c) => (c === oldName ? nextName : c)));
+    if (castPhotos[oldName] !== undefined) {
+      const { [oldName]: photo, ...rest } = castPhotos;
+      setCastPhotos({ ...rest, [nextName]: photo });
+    }
+    if (castAliases[oldName] !== undefined) {
+      const { [oldName]: alias, ...rest } = castAliases;
+      setCastAliases({ ...rest, [nextName]: alias });
     }
   }
   const fileTooBig = (detail: string) =>
@@ -433,7 +460,12 @@ function ProgramDetailInner({
         rightsNote: rightsNote.trim(),
         // 종영일은 종영 상태에서만 의미가 있다 — 상태를 되돌리면 같이 지운다.
         endedDate: status === "ended" ? endedDate.trim() : "",
-        cast,
+        // 배우명+극중 이름을 함께 보낸다 — 서버가 로스터(별칭 포함)를 갱신하고 오버레이
+        // 제목용 대응표(titleCast)를 로스터에서 되투영한다. 대응표를 따로 보내지 않는다.
+        cast: cast.map((name) => ({
+          name,
+          aliases: (castAliases[name] ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+        })),
         synopsis: synopsis.trim(),
         broadcaster: broadcaster.trim(),
         schedule: schedule.trim(),
@@ -445,13 +477,6 @@ function ProgramDetailInner({
         // AI 프롬프트 — 빈 값도 "" 로 보낸다. 서버 PATCH 가 "" 를 받으면 필드를 제거해
         // "지시 없음" 상태로 되돌아간다(안 보내면 기존 값이 병합 유지돼 못 지운다).
         titlePrompt: titlePrompt.trim(),
-        titleCast: titleCastText.split(/\r?\n/).filter((line) => line.trim()).map((line) => {
-          const parts = line.split("=");
-          if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
-            throw new Error("배우 대응표는 한 줄에 '극중 이름 = 배우명' 형식으로 입력해 주세요.");
-          }
-          return { actorName: parts[1].trim(), characterNames: parts[0].split(",").map((name) => name.trim()) };
-        }),
         recommendPrompt: recommendPrompt.trim(),
         moods,
         // 원본을 못 받았으면 **보내지 않는다** — 빈 문자열은 서버에서 삭제로 읽힌다.
@@ -869,10 +894,11 @@ function ProgramDetailInner({
         )}
       </Card>
 
-      {/* 출연진 */}
+      {/* 출연진 — 배우명·극중 이름·사진을 한 카드에서. (구 '오버레이 제목의 배우명'
+          textarea 는 여기에 합쳐졌다 2026-09-15 — 대응표는 서버가 이 목록에서 만든다) */}
       <Card
         title="출연진"
-        hint="인물별 사진 · 이름. refine speaker 라벨링·recommend 프롬프트의 primary source. 다음 재분석부터 반영."
+        hint="인물별 사진 · 배우명 · 극중 이름. 인물 라벨링·recommend 프롬프트의 primary source이고, 극중 이름을 적으면 오버레이 제목에 배우명이 나갑니다. 다음 재분석부터 반영."
       >
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-1 gap-2">
@@ -886,7 +912,19 @@ function ProgramDetailInner({
                   addCast();
                 }
               }}
-              placeholder="예: 은규"
+              placeholder="배우명 · 예: 김도현"
+              className={inputCls}
+            />
+            <input
+              value={newAlias}
+              onChange={(e) => setNewAlias(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addCast();
+                }
+              }}
+              placeholder="극중 이름 (선택 · 쉼표로 여러 개)"
               className={inputCls}
             />
             <Button size="sm" onClick={addCast} disabled={!newName.trim()}>
@@ -910,37 +948,26 @@ function ProgramDetailInner({
             아직 등록된 출연자가 없어요. 위에 이름을 입력하고 Enter.
           </div>
         ) : (
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
             {cast.map((name) => (
               <CastCard
                 key={name}
                 name={name}
+                aliasText={castAliases[name] ?? ""}
                 photoDataUrl={castPhotos[name]}
                 onPickPhoto={(file) => setCastPhoto(name, file)}
                 onClearPhoto={() => removeCastPhoto(name)}
                 onRemove={() => removeCast(name)}
+                onRename={(next) => renameCast(name, next)}
+                onAliasChange={(next) => setCastAliases({ ...castAliases, [name]: next })}
               />
             ))}
           </div>
         )}
-      </Card>
-
-      <Card title="오버레이 제목의 배우명" hint="극중 이름 대신 시청자에게 알려진 배우 활동명을 사용합니다.">
-        <label htmlFor="title-cast" className="mb-1.5 block text-xs font-semibold text-[var(--color-text-muted)]">
-          극중 이름 = 배우명 (한 줄에 한 배우)
-        </label>
-        <textarea
-          id="title-cast"
-          value={titleCastText}
-          onChange={(e) => setTitleCastText(e.target.value)}
-          rows={5}
-          placeholder={"극중 이름, 다른 호칭 = 배우명"}
-          className={textareaCls}
-        />
-        <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-          등록하면 새로 생성하는 오버레이 제목과 제목 재생성에 적용됩니다. 대사 자막은 원문을 유지합니다.
-          같은 역할의 아역·성인역은 구분된 극중 이름으로 입력해 주세요. 인물이 불확실하면 이름을 생략합니다.
-          비우고 저장하면 기존 표기로 돌아갑니다. 이미 저장·렌더된 제목은 자동으로 바뀌지 않습니다.
+        <p className="mt-3 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+          극중 이름을 적으면 새로 생성하는 오버레이 제목·제목 재생성에서 배우명으로 표기됩니다
+          (대사 자막은 원문 유지). 같은 역할의 아역·성인역은 쉼표로 구분해 함께 적어 주세요.
+          이미 저장·렌더된 제목은 자동으로 바뀌지 않습니다.
         </p>
       </Card>
 
@@ -1103,18 +1130,51 @@ function PosterUpload({
   );
 }
 
+/** 합치기(2026-09-15) 전 textarea 로만 등록돼 출연진 명단에 없는 배우를 카드 목록에
+ *  합류시킨다 — 안 그러면 첫 저장의 로스터 갈아엎기가 그 행을 지운다. */
+function castWithTitleCastActors(
+  cast: string[] | undefined,
+  titleCast: Array<{ actorName: string; characterNames: string[] }> | undefined,
+): string[] {
+  const base = [...(cast ?? [])];
+  for (const m of titleCast ?? []) {
+    if (m.actorName && !base.includes(m.actorName)) base.push(m.actorName);
+  }
+  return base;
+}
+
+/** 저장된 titleCast(로스터 투영: actorName=배우명 · characterNames=극중 이름들)를
+ *  카드 편집용 "배우명 → 극중 이름들 텍스트" 매핑으로. 배우명 자신뿐인 행(극중 이름
+ *  없음 — 되투영이 [배우명] 을 폴백으로 넣는다)은 빈 칸으로 보여 준다. */
+function aliasesFromTitleCast(
+  titleCast: Array<{ actorName: string; characterNames: string[] }> | undefined,
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const m of titleCast ?? []) {
+    const rest = (m.characterNames ?? []).filter((n) => n && n !== m.actorName);
+    if (rest.length) map[m.actorName] = rest.join(", ");
+  }
+  return map;
+}
+
 function CastCard({
   name,
+  aliasText,
   photoDataUrl,
   onPickPhoto,
   onClearPhoto,
   onRemove,
+  onRename,
+  onAliasChange,
 }: {
   name: string;
+  aliasText: string;
   photoDataUrl?: string;
   onPickPhoto: (file: File) => void;
   onClearPhoto: () => void;
   onRemove: () => void;
+  onRename: (next: string) => void;
+  onAliasChange: (next: string) => void;
 }) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--color-border-subtle)] bg-muted/20 p-3">
@@ -1138,9 +1198,30 @@ function CastCard({
           }}
         />
       </label>
-      <div className="text-center">
-        <div className="text-sm font-semibold">{name}</div>
-        <div className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">최대 256KB</div>
+      <div className="w-full space-y-1">
+        {/* 배우명 — 사진·극중 이름이 이 값을 키로 매달려 있어, 커밋(블러/Enter) 때 부모가
+            같이 옮긴다. key={name} 리마운트라 defaultValue 로 충분하다. */}
+        <input
+          defaultValue={name}
+          onBlur={(e) => onRename(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder="배우명"
+          title="배우명 (등록 이름 변경)"
+          className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-center text-sm font-semibold outline-none transition-colors hover:border-[var(--color-border-subtle)] focus:border-[var(--color-border-subtle)] focus:bg-[var(--color-bg-input)]"
+        />
+        <input
+          value={aliasText}
+          onChange={(e) => onAliasChange(e.currentTarget.value)}
+          placeholder="극중 이름"
+          title="극중 이름 (쉼표로 여러 개 · 오버레이 제목에서 배우명으로 치환)"
+          className="w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] px-1.5 py-0.5 text-center text-xs outline-none placeholder:text-[var(--color-text-muted)]"
+        />
+        <div className="text-center text-[10px] text-[var(--color-text-muted)]">사진 최대 256KB</div>
       </div>
       <div className="flex items-center gap-1.5">
         {photoDataUrl && (

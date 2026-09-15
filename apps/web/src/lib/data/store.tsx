@@ -869,7 +869,7 @@ export function AppDataProvider({
             if (patch.title != null) merged.title = patch.title;
             if (patch.section != null) merged.section = patch.section;
             if (patch.targetAge != null) merged.targetAge = patch.targetAge as Program["targetAge"];
-            if (patch.cast != null) merged.cast = patch.cast;
+            if (patch.cast != null) merged.cast = patch.cast.map((c) => (typeof c === "string" ? c : c.name));
             if (patch.titleCast != null) merged.titleCast = patch.titleCast;
             return merged;
           }),

@@ -452,7 +452,9 @@ export interface CreateProgramInput {
   title: string;
   section?: string;
   targetAge?: number;
-  cast?: string[];
+  /** 출연진. 문자열(이름만)도 되지만 설정 화면은 {name: 배우명, aliases: 극중 이름들}로
+   *  보낸다 — 서버가 로스터(program_cast)에 별칭까지 싣고 titleCast 를 되투영한다. */
+  cast?: Array<string | { name: string; aliases?: string[] }>;
   /** 파이프라인 분기 축(variety|drama). 미설정이면 워커가 auto 판정.
    *  ""를 보내면 서버가 필드를 삭제한다(= 지정 해제 → auto 판정으로 복귀). */
   pipelineGenre?: "variety" | "drama" | "";
