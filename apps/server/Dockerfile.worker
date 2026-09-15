@@ -120,6 +120,13 @@ RUN mkdir -p /opt/reframe-models \
  && REFRAME_FACE_MODEL=/opt/reframe-models/blaze_face_full_range.tflite \
       /opt/corevenv/bin/python -c \
       "import cv2, mediapipe; from core.reframe.video import resolve_model_path, _mediapipe_detector; _, detector = _mediapipe_detector(resolve_model_path()); detector.close(); print('reframe detector smoke: ok')"
+# 원본 자막 블러 det ONNX — 같은 자세(핀 SHA-256 · 빌드타임 스모크). 다운로더는 PyPI 휠에서
+# 모델만 꺼낸다(rapidocr 를 설치하면 opencv-python 이 위 cv2 contrib 스모크를 깨뜨린다).
+RUN mkdir -p /opt/subblur-models \
+ && /opt/corevenv/bin/python -m core.vision.download_subblur_model \
+      --output /opt/subblur-models/ch_PP-OCRv4_det_infer.onnx \
+ && /opt/corevenv/bin/python -c \
+      "from core.vision.subtitle_blur import SubtitleDetector; SubtitleDetector('/opt/subblur-models/ch_PP-OCRv4_det_infer.onnx'); print('subblur detector smoke: ok')"
 # 렌더 폰트 — 서버 Dockerfile 과 동일 (Pretendard, ASS Fontname 매칭)
 COPY assets/fonts /usr/share/fonts/opentype/pretendard
 RUN fc-cache -f
@@ -136,6 +143,7 @@ ENV CORE_DIR=/app
 # yt-dlp 는 corevenv 에 설치된다(위 pydeps 스테이지) — PATH 의존 대신 경로를 고정한다.
 ENV YT_DLP=/opt/corevenv/bin/yt-dlp
 ENV REFRAME_FACE_MODEL=/opt/reframe-models/blaze_face_full_range.tflite
+ENV SUBBLUR_DET_MODEL=/opt/subblur-models/ch_PP-OCRv4_det_infer.onnx
 
 WORKDIR /app/apps/server
 CMD ["npx", "tsx", "src/worker.ts", "--drain"]
