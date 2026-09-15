@@ -16,8 +16,16 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 
 import { maskNaverId, sealCredential, openCredential, credStoreReady } from "../naver/naver-cred-store.ts";
 
+import { routeSource } from "./sources.ts";
+
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.resolve(SRC, f), "utf-8");
+/**
+ * 라우트가 사는 모든 파일(`index.ts` + `<도메인>/routes.ts`). 네이버 라우트는 2026-09-15 에
+ * `naver/routes.ts` 로 옮겼다 — `index.ts` 만 읽으면 **검사 대상이 사라져** 이 보안 검사가
+ * 조용히 통과한다(그래서 여기가 빨개진 것이고, 그게 맞는 동작이다).
+ */
+const routes = () => routeSource(SRC);
 
 let saved: string | undefined;
 beforeEach(() => { saved = process.env.NAVER_CRED_KEY; });
@@ -128,8 +136,8 @@ describe("노출 경로 — 값이 새지 않는다", () => {
   });
 
   it("라우트가 값을 되돌려주지 않는다", () => {
-    const index = read("index.ts");
-    const route = /app\.put\("\/api\/naver\/accounts\/:id\/credentials"[\s\S]*?\n\}\);/.exec(index)?.[0] ?? "";
+    const index = routes();
+    const route = /app\.put\("\/api\/naver\/accounts\/:id\/credentials"[\s\S]*?\n\s*\}\);/.exec(index)?.[0] ?? "";
     assert.notEqual(route, "", "자격증명 저장 라우트를 못 찾았다");
     assert.match(route, /maskNaverId/, "아이디를 그대로 돌려준다");
     // 응답 **객체 리터럴 안**만 본다 — `c.json(` 뒤 200자 식으로 느슨하게 잡으면 바로 아래의

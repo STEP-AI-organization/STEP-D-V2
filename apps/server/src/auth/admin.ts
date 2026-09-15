@@ -17,10 +17,40 @@
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { getRawPool } from "../db-pg.ts";
-import { authRequired, type User } from "./auth.ts";
+import { authRequired, canManageWorkspace, type User } from "./auth.ts";
 
 export function isSuperadmin(user: User | undefined): boolean {
   return user?.role === "superadmin" && user.status === "active";
+}
+
+/**
+ * 로그인한 사용자. 세션이 없으면 401.
+ *
+ * `index.ts` 에 있던 것을 여기로 옮겼다(2026-09-15 · 라우트 분할 2호). 도메인별
+ * `<도메인>/routes.ts` 들이 이걸 쓰는데, `index.ts` 에 두면 **라우트 파일 → index.ts →
+ * 라우트 파일** 로 순환 import 가 된다. 같은 모양의 관문(`requireSuperadmin` 아래)이
+ * 이미 여기 있으니 자리도 맞다.
+ */
+export function requireUser(c: Context<{ Variables: { user?: User } }>): User {
+  const user = c.get("user");
+  if (!user) throw new HTTPException(401, { message: "login required" });
+  return user;
+}
+
+/**
+ * 워크스페이스를 **관리**할 수 있는 사람(owner/admin). 사람 초대·채널 연결·계정 관리처럼
+ * 조직을 바꾸는 라우트의 관문이다.
+ *
+ * ⚠️ 운영 역할(`role`: editor/cp/pd/vendor)과 다른 축이다 — 배포·승인 권한은
+ * `publish-dispatch` 가 따로 본다. 합치면 "워크스페이스 owner 인 외주 편집자" 에게
+ * 배포가 열린다(루트 CLAUDE.md "용어" 참조).
+ */
+export function requireManager(c: Context<{ Variables: { user?: User } }>): User {
+  const user = requireUser(c);
+  if (!canManageWorkspace(user.role)) {
+    throw new HTTPException(403, { message: "워크스페이스 관리는 owner/admin 만 가능합니다." });
+  }
+  return user;
 }
 
 /**

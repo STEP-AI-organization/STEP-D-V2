@@ -66,8 +66,9 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono + 별도 워커 프로세스 구조. **라우트 285개** — `index.ts`(~13,500줄) 276개 +
-도메인 파일 9개(`chatbot/routes.ts` 4 · `report/routes.ts` 5). 도메인 이전 진행 중.
+Hono + 별도 워커 프로세스 구조. **라우트 285개** — `index.ts`(~13,300줄) 263개 +
+도메인 파일 22개(`naver/routes.ts` 13 · `report/routes.ts` 5 · `chatbot/routes.ts` 4).
+도메인 이전 진행 중.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
