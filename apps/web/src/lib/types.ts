@@ -155,6 +155,10 @@ export interface Recommendation {
   /** 처음 제목 생성 단계에서 뽑힌 대체 제목 후보들 (기본 title 포함/미포함 무관).
    *  에디터의 '제목 후보' 탭이 이 배열을 후보 리스트로 표시한다. 비어 있으면 title 하나만. */
   titleCandidates?: string[];
+  /** 오버레이 문구 후보 (2026-09-15 3형). kind: name=실명형(YOLO 확인 인물) ·
+   *  quote=인용형(실 대사) · situation=상황설명형. 검증 통과한 실명형이 있으면 core 가
+   *  기본(titleLine1/2)을 그것으로 승격하고, 원래 기본은 여기 맨 앞에 남긴다. */
+  titleAlts?: Array<{ kind?: "name" | "quote" | "situation"; titleLine1: string; titleLine2: string }>;
   /** YOLO 사람 검출 뒤 등록 얼굴과 일치한 출연자. 제목 배우명 검증의 근거다. */
   visibleCast?: Array<{
     castId?: string;
@@ -314,6 +318,8 @@ export interface Clip {
   titleLine2Color?: string;
   /** 채택 당시의 검증된 출연자 근거. 제목 재생성에서도 등록만 된 배우를 추측하지 않게 한다. */
   visibleCast?: Recommendation["visibleCast"];
+  /** 오버레이 문구 3형 후보 — adopt 시 rec 에서 승계. 확인·수정 팝업의 후보 목록. */
+  titleAlts?: Recommendation["titleAlts"];
   /** 첫 3초 hook intro (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md) — adopt 시 rec 에서 승계.
    *  에디터 "첫 3초 훅" 토글(editorState.hookOn) ON + hookTimeSec 있을 때 /export 가 프리롤로 붙인다. */
   hookQuote?: string;

@@ -360,6 +360,9 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           title: rec.title,
           titleLine1: rec.titleLine1,
           titleLine2: rec.titleLine2,
+          // 오버레이 3형 후보(2026-09-15) — 대기 카드의 확인·수정 팝업이 고를 목록.
+          // 안 실으면 추천엔 있는데 클립엔 없어 화면이 후보를 못 그린다(titleLine1/2 누락과 같은 모양).
+          titleAlts: Array.isArray((rec as any).titleAlts) ? (rec as any).titleAlts : undefined,
           hookQuote: rec.hookQuote,
           hookTimeSec: rec.hookTimeSec,
           hookIntroCaption: rec.hookIntroCaption,
