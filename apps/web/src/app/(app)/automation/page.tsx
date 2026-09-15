@@ -51,12 +51,11 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 // 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
 // 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
 import {
-  RULE_ASPECTS, UPLOAD_PLATFORMS, formatWeekdays, isAllDayWindow, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
+  UPLOAD_PLATFORMS, formatWeekdays, isAllDayWindow, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
   slotLabel, type RuleAspect, type RuleSlot,
 } from "@server-pure/pipeline/automation";
-// 배치 라벨·기하는 편집기 프리셋에서 읽는다(라벨을 여기 다시 적지 않는다 — 편집기와
-// 자동배포가 같은 배치를 다른 이름으로 부르면 실무자가 둘을 같은 것으로 못 본다).
-import { ASPECT_PRESETS } from "@/lib/editor/aspect-presets";
+// 배치 픽커(레이아웃)는 템플릿 설정 다이얼로그(template-preview.tsx)로 이동 — RULE_ASPECTS·
+// ASPECT_PRESETS 도 거기서 읽는다(라벨 정본은 계속 편집기 프리셋).
 import { SlotPicker } from "@/components/automation/slot-picker";
 import {
   LayoutSliders,
@@ -397,13 +396,19 @@ export default function AutomationPage() {
   useEffect(() => {
     if (skipLayoutReset.current) { skipLayoutReset.current = false; return; }
     const s = TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"];
-    // 템플릿을 바꿔도 요소 표시 플래그(제목·로고·시간박스)는 유지한다 — 위치만 시드로 리셋.
+    // 템플릿을 바꿔도 요소 표시 플래그(제목·로고·시간박스)와 **스타일**(글꼴·크기·자간·행간·
+    // 그림자)은 유지한다 — 위치·색만 시드로 리셋. 스타일은 템플릿 기하가 아니라 사용자 선택이다.
     setLayout((prev) => ({
       titleY: s.titleY, channelIconY: s.iconY, channelBoxY: s.boxY, channelIconSize: s.iconSize,
       titleColor: s.accent,
       subtitleY: SUBTITLE_DEFAULTS.y, subtitleSize: SUBTITLE_DEFAULTS.size, subtitleColor: SUBTITLE_DEFAULTS.color,
       // 로고 기본 **표시**(2026-09-02) — 서버 렌더 기본(layout?.logo ?? true)과 짝이다.
-      ...(prev ? { title: prev.title, logo: prev.logo ?? true, timebox: prev.timebox } : { logo: true }),
+      ...(prev ? {
+        title: prev.title, logo: prev.logo ?? true, timebox: prev.timebox,
+        titleFont: prev.titleFont, titleSize: prev.titleSize, titleSpacing: prev.titleSpacing,
+        titleLineHeight: prev.titleLineHeight, titleShadow: prev.titleShadow,
+        captionFont: prev.captionFont, subtitleSpacing: prev.subtitleSpacing, subtitleShadow: prev.subtitleShadow,
+      } : { logo: true }),
     }));
   }, [effectiveTemplate]);
 
@@ -536,6 +541,12 @@ export default function AutomationPage() {
         subtitleColor: r.layout.subtitleColor ?? SUBTITLE_DEFAULTS.color,
         // 요소 표시 플래그 — 미지정(구 계획)은 표시. 저장값 그대로 라운드트립.
         title: r.layout.title, logo: r.layout.logo ?? true, timebox: r.layout.timebox,
+        // 제목·자막 스타일(2026-09-15) — 미지정 = 기본(undefined 그대로 · 저장도 안 된다).
+        titleFont: r.layout.titleFont, titleSize: r.layout.titleSize,
+        titleSpacing: r.layout.titleSpacing, titleLineHeight: r.layout.titleLineHeight,
+        titleShadow: r.layout.titleShadow,
+        captionFont: r.layout.captionFont, subtitleSpacing: r.layout.subtitleSpacing,
+        subtitleShadow: r.layout.subtitleShadow,
       });
     }
   }, [selProgram, rules, loading]);
@@ -1511,7 +1522,7 @@ export default function AutomationPage() {
               disabled={!layout}
               onClick={() => setTplPreviewOpen(true)}
             >
-              미리보기 · 세부 조정
+              템플릿 설정 · 미리보기
             </button>
           </div>
         </div>
@@ -1592,62 +1603,9 @@ export default function AutomationPage() {
                 하한은 쇼츠 점수 분포상 계획 전량을 막아 세우는 함정이었고(서버 주석 참조),
                 화면의 "점수 80 이상" 배지는 그 사실을 사용자에게 설명해 주지도 못했다. */}
 
-            {/* 세로 영상 배치 — 원본 마크업·도해 그대로(automation D:1005–1116).
-                라벨·설명은 편집기 프리셋(aspect-presets.ts)에서 읽는데, **원본 문구와 이미
-                글자까지 같다** — 편집기와 자동배포가 같은 배치를 다른 이름으로 부르면
-                실무자가 둘을 같은 것으로 못 보므로 정본은 계속 프리셋이다.
-                클립(가로) 전용 계획엔 의미가 없어 흐리게 처리한다. */}
-            <div className="space-y-2" style={mediaKind === "clip" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
-              <label className="block font-bold text-xs text-[var(--color-text-primary)]">
-                세로 영상 배치
-              </label>
-
-              {/* Option 1: Top Full Width Option (자동 (영상 템플릿 기본)) */}
-              {/* 자동 = 영상 템플릿이 가진 영상창 그대로(지금까지의 동작). 템플릿 셀렉터의
-                  '자동'과 같은 뜻 — 고른 적 없는 계획은 저장해도 결과물이 안 바뀐다. */}
-              <div
-                onClick={() => setAspect("")}
-                style={{ boxShadow: "none" }}
-                className={`p-3.5 rounded-xl cursor-pointer transition-all flex items-center gap-3 shadow-none ${
-                  !aspect
-                    ? "border-2 border-[#1C60FF] bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10"
-                    : "border border-slate-200 dark:border-stone-700/80 bg-white dark:bg-stone-800 hover:border-slate-400"
-                }`}
-              >
-                <div className="w-6 h-8 rounded border border-dashed border-slate-400 dark:border-stone-500 bg-stone-900/60 shrink-0" />
-                <div>
-                  <h5 className="font-bold text-xs text-[var(--color-text-primary)]">자동 (영상 템플릿 기본)</h5>
-                  <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-                    템플릿이 정한 영상창을 그대로 사용
-                  </p>
-                </div>
-              </div>
-
-              {/* Options 2 ~ 5: 2-Column Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {ASPECT_PRESETS.filter((p) => (RULE_ASPECTS as readonly string[]).includes(p.id)).map((p) => (
-                  <div
-                    key={p.id}
-                    onClick={() => setAspect(p.id as RuleAspect)}
-                    style={{ boxShadow: "none" }}
-                    className={`p-3.5 rounded-xl cursor-pointer transition-all flex items-center gap-3 shadow-none ${
-                      aspect === p.id
-                        ? "border-2 border-[#1C60FF] bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10"
-                        : "border border-slate-200 dark:border-stone-700/80 bg-white dark:bg-stone-800 hover:border-slate-400"
-                    }`}
-                  >
-                    <AspectGlyph id={p.id} />
-                    <div>
-                      <h5 className="font-bold text-xs text-[var(--color-text-primary)]">{p.label}</h5>
-                      <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">{p.hint}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <p className="text-[11px] text-[var(--color-text-muted)] font-medium pt-1">
-                원본 영상이 세로 화면에 어떻게 앉을지 정합니다 — 편집기의 같은 이름 배치와 결과가 동일합니다
-              </p>
-            </div>
+            {/* 세로 영상 배치는 **템플릿 설정 다이얼로그로 이동**했다(2026-09-15 — 스크린샷 요구
+                "레이아웃" 섹션). 여기 두면 배치·위치·스타일이 두 화면에 갈라져 어느 쪽이
+                결과인지 헷갈린다 — 배치를 바꾸면 미리보기가 즉시 그 배치로 바뀌는 자리가 정본. */}
 
             {/* AI 리프레임 — 수동 채택 다이얼로그(adopt-dialog)와 같은 선택지·라벨.
                 숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
@@ -2324,7 +2282,8 @@ export default function AutomationPage() {
         별개입니다 — 잠겨 있으면 승인해도 기록만 남습니다.
       </div>
 
-      {/* 템플릿 대형 미리보기 — 부모 layout 상태를 공유해 슬라이더가 즉시 반영된다. */}
+      {/* 템플릿 설정 다이얼로그 — 부모 layout 상태를 공유해 컨트롤이 즉시 반영된다.
+          레이아웃(세로 영상 배치)도 여기서 고른다(고급 설정에서 이동 · 2026-09-15). */}
       {tplPreviewOpen && layout && (
         <TemplatePreviewDialog
           template={templates.find((t) => t.name === effectiveTemplate) ?? null}
@@ -2337,6 +2296,8 @@ export default function AutomationPage() {
           timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
           iconSrc={programs.find((p) => p.id === selProgram)?.hasBrandIcon ? programImageUrl(selProgram, "icon") : undefined}
           aspect={aspect}
+          onAspectChange={(v) => setAspect(v as RuleAspect | "")}
+          aspectDisabled={mediaKind === "clip"}
           onLayoutChange={setLayout}
           onClose={() => setTplPreviewOpen(false)}
         />
@@ -2365,44 +2326,7 @@ export default function AutomationPage() {
  * "1단계" 를 옅은 라벨로 낮춘다 — 위계는 제목이 지고, 번호는 순서만 알려주면 된다.
  * (색은 STEP D 토큰 그대로다 — AENA 의 zinc 클래스를 옮기면 다크 테마가 깨진다.)
  */
-/**
- * 배치 미니 도해 — **원본 그대로**(automation D:1020·1040·1061·1082).
- *
- * 예전엔 프리셋 `rect` 를 캔버스 비율로 환산해 그렸다(기하가 늘 맞는 대신 원본과 다른 그림).
- * 디자인 존중이 원칙이라 원본 도해를 쓴다 — 대신 **프리셋 4종이 고정**이라는 전제가 붙는다.
- * `RULE_ASPECTS` 에 배치가 늘거나 `rect` 가 바뀌면 여기 도해도 같이 고쳐야 한다.
- */
-const GLYPH_BOX = "w-6 h-8 rounded shrink-0 p-1 flex";
-function AspectGlyph({ id }: { id: string }) {
-  switch (id) {
-    case "9:16-letterbox": // 세로 · 전체 담기 — 위·아래 레터박스 띠
-      return (
-        <div className={`${GLYPH_BOX} bg-indigo-950 flex-col items-center justify-between border border-indigo-700/50`}>
-          <div className="w-full h-1 bg-[#1C60FF] rounded-xs" />
-          <div className="w-full h-1 bg-[#1C60FF] rounded-xs" />
-        </div>
-      );
-    case "9:16-crop-full": // 세로 · 꽉 채우기 — 여백 없이 꽉 참
-      return (
-        <div className={`${GLYPH_BOX} bg-stone-800 items-center justify-center border border-stone-700`}>
-          <div className="w-full h-full bg-stone-600 rounded-xs" />
-        </div>
-      );
-    case "9:16-crop-main": // 세로 · 위 자막띠 — 위 띠 1개
-      return (
-        <div className={`${GLYPH_BOX} bg-stone-900 flex-col justify-between border border-stone-700`}>
-          <div className="w-full h-2 bg-stone-600 rounded-xs" />
-        </div>
-      );
-    default: // 9:16-crop-sub — 세로 · 위아래 띠
-      return (
-        <div className={`${GLYPH_BOX} bg-stone-900 flex-col justify-between border border-stone-700`}>
-          <div className="w-full h-1.5 bg-stone-600 rounded-xs" />
-          <div className="w-full h-1.5 bg-stone-600 rounded-xs" />
-        </div>
-      );
-  }
-}
+/* 배치 미니 도해(AspectGlyph)는 템플릿 설정 다이얼로그와 함께 template-preview.tsx 로 이동(2026-09-15). */
 
 /** 원본 단계 머리말(D:417–423) — 제목 옆에 설명이 한 줄로 붙는다. */
 function FlowStepHeader({ step, title, description }: { step: string; title: string; description: string }) {

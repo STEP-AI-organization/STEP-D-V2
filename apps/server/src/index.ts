@@ -5435,6 +5435,8 @@ type TitleLineLayout = {
   by: number;
   /** nowrap+shrink-to-fit 후 폰트 px. */
   fitPx: number;
+  /** 자간(출력 px · es.titleSpacing). PNG 는 canvas letterSpacing, ASS 는 \fsp 로 굽는다. */
+  spacing: number;
   /** 원본 색 (#rrggbb). ASS 는 hexToAss 로 변환, canvas 는 그대로. */
   colorHex: string;
   /** 키프레임·시간창 없는 완전 정적 줄인가 (= canvas-PNG 로 옮겨도 되는가). */
@@ -5443,13 +5445,20 @@ type TitleLineLayout = {
 
 /**
  * 제목 줄들의 배치 계산 — buildEditorAss 의 옛 인라인 루프를 추출한 **공유 정본**.
- * 여러 줄은 fitPx*1.15 만큼 세로로 쌓인다(윗줄 높이 누적). 빈 줄은 건너뛰고 누적도 안 한다.
+ * 여러 줄은 fitPx×행간(기본 1.15 · es.titleLineHeight) 만큼 세로로 쌓인다(윗줄 높이 누적).
+ * 빈 줄은 건너뛰고 누적도 안 한다. 자간(es.titleSpacing · 출력 px)은 폭 측정에 더해져
+ * shrink-to-fit 에 반영되고, 결과(spacing)로 PNG(letterSpacing)·ASS(\fsp)가 같은 값을 굽는다.
  * ⚠️ 파리티 테스트가 이 안의 표현식(`align === "left" ? cx - half + pad ...`,
  *    `wrapTextToWidth(t.text, TITLE_BLOCK * W - 2 * pad, px)`)을 스캔한다 — 형태를 유지할 것.
  */
 function layoutTitleLines(es: any, W: number, H: number, scale: number): TitleLineLayout[] {
   const out: TitleLineLayout[] = [];
   if (!es || typeof es !== "object") return out;
+  // 제목 자간(출력 px)·행간(배수) — 자동배포 템플릿 설정/편집기의 제목 스타일(2026-09-15).
+  // 미지정 = 종전 그대로(자간 0 · 행간 1.15). 행간은 상식 범위 밖 값(오염 데이터)을 기본으로 접는다.
+  const spacing = Number.isFinite(Number(es.titleSpacing)) ? Number(es.titleSpacing) : 0;
+  const lhRaw = Number(es.titleLineHeight);
+  const lineHeight = Number.isFinite(lhRaw) && lhRaw >= 0.7 && lhRaw <= 2.5 ? lhRaw : 1.15;
   let yOff = 0;
   for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
     if (!t?.text?.trim()) continue;
@@ -5466,11 +5475,13 @@ function layoutTitleLines(es: any, W: number, H: number, scale: number): TitleLi
     // 제목 줄은 재접지 않는다(D) — wrapTextToWidth 로 넘침만 측정하고, 접는 대신 폰트를 줄여
     // 한 줄에 맞춘다(nowrap + shrink-to-fit). 미리보기(whiteSpace:nowrap)와 줄 수가 항상 일치.
     const rows = wrapTextToWidth(t.text, TITLE_BLOCK * W - 2 * pad, px);
-    const full = textWidthPx(t.text, px);
-    const fitPx = rows.length > 1 && full > blockW ? Math.max(6, px * (blockW / full)) : px;
-    const adv = Math.round(fitPx * 1.15);             // CSS line-height: 1.15
+    // 폭 측정에 자간을 더한다(글자 사이 N-1 곳) — 안 더하면 자간 넓힌 제목이 블록 밖으로 넘친다.
+    const full = textWidthPx(t.text, px) + spacing * Math.max(0, [...String(t.text)].length - 1);
+    // spacing !== 0 이면 rows(자간 없는 측정)로는 넘침을 못 보므로 폭 초과만으로 축소한다.
+    const fitPx = (rows.length > 1 || spacing !== 0) && full > blockW ? Math.max(6, px * (blockW / full)) : px;
+    const adv = Math.round(fitPx * lineHeight);       // CSS line-height (기본 1.15 · es.titleLineHeight)
     const isStatic = !(Array.isArray(t.keyframes) && t.keyframes.length) && t.startSec == null && t.endSec == null;
-    out.push({ t, text: t.text, align, an, bx, by: by0, fitPx, colorHex: t.color ?? "#FFFFFF", isStatic });
+    out.push({ t, text: t.text, align, an, bx, by: by0, fitPx, spacing, colorHex: t.color ?? "#FFFFFF", isStatic });
     yOff += adv;
   }
   return out;
@@ -5493,6 +5504,8 @@ function buildStaticOverlayItems(
   // 제목 — 미리보기 fontWeight:800 + textShadow "0 2px 6px rgba(0,0,0,.5)".
   // 줄별 글꼴(font)·외곽선(stroke)은 미리보기(editor-preview.tsx)를 정본으로 그대로 실어 보낸다.
   // 외곽선 폭은 모델이 미리보기 px 이라 scale 배해 출력 해상도로 올린다(그림자 offset 과 같은 규칙).
+  // 그림자는 es.titleShadow === false 일 때만 끈다(제목 스타일 · 기본 켬 = 종전과 동일).
+  const titleShadowOn = (es as any).titleShadow !== false;
   for (const L of layoutTitleLines(es, W, H, scale)) {
     if (!L.isStatic) continue; // 애니메이션/시간창 있는 줄은 ASS 가 굽는다(PNG 는 정적만).
     const st = L.t?.stroke;
@@ -5505,7 +5518,8 @@ function buildStaticOverlayItems(
       text: L.text, x: L.bx, y: L.by, align: L.align, baseline: "top",
       fontPx: L.fitPx, weight: 800, font: typeof L.t?.font === "string" ? L.t.font : undefined,
       color: L.colorHex, opacity: 1,
-      shadow: { offsetY: 2 * scale, blur: 6 * scale, color: "rgba(0,0,0,0.5)" },
+      ...(L.spacing ? { letterSpacing: L.spacing } : {}),
+      ...(titleShadowOn ? { shadow: { offsetY: 2 * scale, blur: 6 * scale, color: "rgba(0,0,0,0.5)" } } : {}),
       stroke,
     });
   }
@@ -5596,7 +5610,10 @@ function buildEditorAss(
       const color = hexToAss(L.colorHex);
       // 글꼴 — canvas-PNG 경로(overlay-canvas)와 같은 값을 ASS 에도 얹는다. 안 얹으면 이 경로만
       // Style Default(Pretendard) 로 나가 같은 영상 안에서 줄마다 글꼴이 달라진다.
-      const fnTag = ASS_FONT_BY_ID[String((t as any)?.font ?? "")] ? `\\fn${ASS_FONT_BY_ID[String((t as any).font)]}` : "";
+      // 자간(\fsp · 출력 px)·그림자 끄기(\shad0)도 같은 이유로 얹는다 — PNG 경로와 시각 일치.
+      const fnTag = (ASS_FONT_BY_ID[String((t as any)?.font ?? "")] ? `\\fn${ASS_FONT_BY_ID[String((t as any).font)]}` : "")
+        + (L.spacing ? `\\fsp${Math.round(L.spacing)}` : "")
+        + ((es as any).titleShadow === false ? "\\shad0" : "");
       const fs = assFs(fitPx);
       const win = winFor(t);
       if (win) {
@@ -5687,6 +5704,10 @@ function buildEditorAss(
     // 인라인 색 태그 — 비카라오케 문장에 얹는다. **별도 변수로 뺀다**: push() 안에 중첩 백틱이
     // 생기면 overlay-parity 스캔이 자막 이벤트를 못 센다(정규식이 `Dialogue:[^`]*` 로 잡는다).
     const capColorInline = capColorOverride ? `\\1c${capColorOverride}` : "";
+    // 자막 자간(\fsp · 출력 px) — 자동배포/편집기 자막 스타일(captionSpacing). 미지정 = 태그 없음.
+    const capSpacingInline = es && typeof es === "object" && Number.isFinite((es as any).captionSpacing)
+      && Number((es as any).captionSpacing) !== 0
+      ? `\\fsp${Math.round(Number((es as any).captionSpacing))}` : "";
     // 화면 단위로 끊는다 — STT 세그먼트 한 덩어리(40~60자)가 통째로 뜨면 쇼츠에선 화면 절반이
     // 자막이 된다. 미리보기(editor-shell captionText)가 **같은 함수·같은 상한**으로 끊어 보여준다.
     const capMaxChars = captionMaxCharsOf(es);
@@ -5723,12 +5744,12 @@ function buildEditorAss(
           });
           // \q1 = 그리디 자동 줄바꿈. 스크립트 전역은 WrapStyle 2(줄바꿈 없음)라, 이게 없으면
           // 긴 문장이 미리보기에선 접히고 렌더에선 화면 밖으로 뻗는다.
-          captionEv.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\q1\\1c${white}}${parts.join(" ")}`);
+          captionEv.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\q1${capSpacingInline}\\1c${white}}${parts.join(" ")}`);
           prev = we;
         });
       } else {
         // 비카라오케 문장 — 색 오버라이드가 있으면 인라인 \1c(capColorInline)로 얹는다(스타일 PrimaryColour 위에).
-        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,{\\q1${capColorInline}}${assEscape(text)}`);
+        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,{\\q1${capSpacingInline}${capColorInline}}${assEscape(text)}`);
       }
     }
   }
@@ -5757,7 +5778,9 @@ function buildEditorAss(
     // 방영시간 박스 라벨 — BorderStyle=3(불투명 박스), Outline=박스 패딩. 박스 색은 인라인 \3c.
     `Style: BoxLabel,Pretendard ExtraBold,48,&H00FFFFFF,&H00D97B3D,&H00D97B3D,1,3,14,0,5,20,20,20,1\n` +
     captionAssStyle(capStyle, H, capMV, capMH, capSizePct,
-      typeof (es as any)?.captionFont === "string" ? (es as any).captionFont : undefined)
+      typeof (es as any)?.captionFont === "string" ? (es as any).captionFont : undefined,
+      // 자막 그림자 끄기 — 자동배포 subtitleShadow=false → es.captionShadow=false (factory).
+      es && typeof es === "object" && (es as any).captionShadow === false)
     + "\n\n" +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
@@ -5836,7 +5859,7 @@ const ASS_FONT_BY_ID: Record<string, string> = {
   recipekorea: "Recipekorea Medium",
 };
 
-function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number, fontId?: string): string {
+function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number, fontId?: string, shadowOff?: boolean): string {
   // 자막 서체 = **지마켓 산스 Bold** (사용자 확정 2026-08-28). 바뀌는 건 자막뿐이다 —
   // 제목·방영시간 박스(위 Default·BoxLabel 스타일)는 그대로 Pretendard ExtraBold 다.
   //
@@ -5856,6 +5879,9 @@ function captionAssStyle(style: string, H: number, mv: number, mh: number, sizeP
   // 크기 오버라이드(sizePct · % · 화면 높이 기준)가 있으면 그걸, 없으면 스타일 기본표(CAPTION_PCT).
   const pct = Number.isFinite(sizePct) && Number(sizePct) > 0 ? Number(sizePct) : (CAPTION_PCT[style] ?? CAPTION_PCT.korean_pop);
   const fs = assFs((H * pct) / 100);
+  // 그림자 끄기(captionShadow === false) — Shadow 필드만 0 으로. 외곽선·박스는 그대로다
+  // (그림자 체크박스는 그림자만 다룬다 · 자동배포 템플릿 설정/편집기 자막 스타일).
+  const sh = (n: number) => (shadowOff ? 0 : n);
   // ASS 필드: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold,
   //          BorderStyle(1=outline+shadow, 3=box), Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
   // 색은 &HAABBGGRR (Alpha·B·G·R). 프리뷰(editor-preview.tsx:captionStyleClasses)와 시각 매칭.
@@ -5868,7 +5894,7 @@ function captionAssStyle(style: string, H: number, mv: number, mh: number, sizeP
       return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&H00000000,1,1,1,0,2,${mh},${mh},${mv},1`;
     case "yellow_pop":
       // 노란 팝: 노랑 #FFD400 (BGR &H0000D4FF) + 검정 스트로크 + 그림자 (font-extrabold)
-      return `Style: Caption,${xbold},${fs},&H0000D4FF,&H00000000,&H80000000,1,1,4,2,2,${mh},${mh},${mv},1`;
+      return `Style: Caption,${xbold},${fs},&H0000D4FF,&H00000000,&H80000000,1,1,4,${sh(2)},2,${mh},${mh},${mv},1`;
     case "cyan_neon":
       // 시안 네온: 시안 #00E5FF (BGR &H00FFE500) + 시안 아웃라인 (네온 그로우 근사 · font-extrabold)
       return `Style: Caption,${xbold},${fs},&H00FFE500,&H00CC8500,&H00000000,1,1,3,0,2,${mh},${mh},${mv},1`;
@@ -5880,7 +5906,7 @@ function captionAssStyle(style: string, H: number, mv: number, mh: number, sizeP
       return `Style: Caption,${black},${fs},&H00000000,&H00FFFFFF,&H00000000,1,1,5,0,2,${mh},${mh},${mv},1`;
     case "shadow_soft":
       // 부드러운 그림자: 흰 텍스트 + 큰 부드러운 그림자 (프리뷰 0 2px 12px · font-medium)
-      return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&H80000000,0,1,0,4,2,${mh},${mh},${mv},1`;
+      return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&H80000000,0,1,0,${sh(4)},2,${mh},${mh},${mv},1`;
     case "highlight_bar":
       // 형광펜: 검정 텍스트 + 노랑 박스 #FFE066 (BGR &H0066E0FF · font-bold)
       return `Style: Caption,${font},${fs},&H00000000,&H00000000,&H0066E0FF,1,3,0,0,2,${mh},${mh},${mv},1`;
@@ -5891,7 +5917,7 @@ function captionAssStyle(style: string, H: number, mv: number, mh: number, sizeP
     case "korean_pop":
     default:
       // 예능 팝 (기본): 흰 텍스트 + 두꺼운 검정 스트로크 + 그림자 (font-extrabold)
-      return `Style: Caption,${xbold},${fs},&H00FFFFFF,&H00000000,&H80000000,1,1,4,2,2,${mh},${mh},${mv},1`;
+      return `Style: Caption,${xbold},${fs},&H00FFFFFF,&H00000000,&H80000000,1,1,4,${sh(2)},2,${mh},${mh},${mv},1`;
   }
 }
 
@@ -6515,6 +6541,11 @@ app.post("/api/automation/rules", async (c) => {
           ? { titleFont: l.titleFont } : {}),
         ...(typeof l.captionFont === "string" && FONT_FAMILIES.some((f) => f.id === l.captionFont)
           ? { captionFont: l.captionFont } : {}),
+        // 제목·자막 스타일(2026-09-15 템플릿 설정) — 크기 배율(%)·자간(px)·행간(배수)은 숫자,
+        // 그림자는 불리언. factory.autoEditorState 의 layoutOverride 가 소비한다.
+        ...num("titleSize"), ...num("titleSpacing"), ...num("titleLineHeight"), ...num("subtitleSpacing"),
+        ...(typeof l.titleShadow === "boolean" ? { titleShadow: l.titleShadow } : {}),
+        ...(typeof l.subtitleShadow === "boolean" ? { subtitleShadow: l.subtitleShadow } : {}),
         ...(typeof l.channelBoxColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.channelBoxColor)
           ? { channelBoxColor: l.channelBoxColor } : {}),
         // 배포 언어 (2026-09-07) — 자막·제목·메타·글꼴이 전부 이 값을 따른다.

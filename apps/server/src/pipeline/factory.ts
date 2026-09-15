@@ -723,6 +723,16 @@ export function autoEditorState(
     title?: boolean; logo?: boolean; timebox?: boolean;
     /** 글꼴(카탈로그 id · overlay-canvas FONT_FAMILIES) — 제목·자막 각각(2026-08-28). */
     titleFont?: string; captionFont?: string;
+    /**
+     * 제목 스타일 (2026-09-15 템플릿 설정 확장):
+     *  - titleSize        크기 배율(% · 기본 100 · 50~200 클램프) — 시드 106/107px 에 곱한다
+     *  - titleSpacing     자간(출력 px · 기본 0) → es.titleSpacing (렌더 layoutTitleLines)
+     *  - titleLineHeight  행간(배수 · 기본 1.15) → es.titleLineHeight
+     *  - titleShadow      그림자(기본 true) — false 만 실어 보낸다 → es.titleShadow:false
+     */
+    titleSize?: number; titleSpacing?: number; titleLineHeight?: number; titleShadow?: boolean;
+    /** 자막 스타일 — 자간(출력 px)·그림자. es.captionSpacing / es.captionShadow 로 옮긴다. */
+    subtitleSpacing?: number; subtitleShadow?: boolean;
     /** 방영시간 박스 배경색(#RRGGBB). */
     channelBoxColor?: string;
     /**
@@ -806,6 +816,10 @@ export function autoEditorState(
   // 그대로 흘러가면 렌더가 조용히 기본 폰트로 그려서 "바꿨는데 그대로"가 된다.
   const titleFont = FONT_FAMILIES.some((f) => f.id === layoutOverride?.titleFont)
     ? String(layoutOverride?.titleFont) : "";
+  // 제목 크기 배율(% · 기본 100) — 극단값은 클램프한다(50~200). 렌더 nowrap+shrink 가 블록 폭
+  // 초과분은 다시 줄이므로 200% 도 화면 밖으로는 안 나간다.
+  const titleScale = Number.isFinite(layoutOverride?.titleSize)
+    ? Math.min(2, Math.max(0.5, Number(layoutOverride!.titleSize) / 100)) : 1;
   return {
     // 종횡비 = 5-값 enum(aspect-presets.ts). 쇼츠 = 세로 메인 크롭(위 자막띠) 기본 · 클립(롱폼) = 가로.
     // clip.aspectRatio 배정(adopt/자동배포)과 같은 값이라 라벨↔렌더가 일치한다. 자동배포 경로가
@@ -823,7 +837,8 @@ export function autoEditorState(
     // 규칙에서 제목을 끄면 줄 자체를 비운다 — 렌더·편집기 둘 다 titleLines 가 없으면 안 그린다.
     titleLines: layoutOverride?.title === false ? [] : lines.map((text, i) => ({
       id: `t${i}`, text,
-      size: (i === 0 ? 106 : 107) / titleOutScale,
+      // 기본 출력값 106/107px × 크기 배율(titleSize% · 기본 1) — overlay-parity 가 형태를 스캔한다.
+      size: ((i === 0 ? 106 : 107) / titleOutScale) * titleScale,
       color: lines.length === 1 || i === 1 ? titleAccent : "#FFFFFF",
       // 글꼴 — 규칙 layout.titleFont(카탈로그 id)가 있으면 그걸, 없으면 **기본 지마켓 산스**
       // (고객사 지정 2026-08-28). overlay-canvas 가 줄마다 이 값을 읽어 등록된 패밀리로
@@ -866,6 +881,18 @@ export function autoEditorState(
             .map((k) => [k, layoutOverride[k]]),
         )
       : {}),
+    // 제목 스타일(2026-09-15) — 자간(출력 px)·행간(배수)·그림자 off. 렌더(layoutTitleLines·
+    // buildStaticOverlayItems·ASS \fsp/\shad0)와 편집기 미리보기가 같은 es 필드를 읽는다.
+    // 기본값(0 · 1.15 · 그림자 켬)은 필드를 안 실어 기존 editorState JSON 이 그대로다(무회귀).
+    ...(layoutOverride && Number.isFinite(layoutOverride.titleSpacing) && Number(layoutOverride.titleSpacing) !== 0
+      ? { titleSpacing: layoutOverride.titleSpacing } : {}),
+    ...(layoutOverride && Number.isFinite(layoutOverride.titleLineHeight) && Number(layoutOverride.titleLineHeight) !== 1.15
+      ? { titleLineHeight: layoutOverride.titleLineHeight } : {}),
+    ...(layoutOverride?.titleShadow === false ? { titleShadow: false } : {}),
+    // 자막 스타일 — 자간·그림자 off (subtitle* → caption* · 렌더 buildEditorAss/captionAssStyle).
+    ...(layoutOverride && Number.isFinite(layoutOverride.subtitleSpacing) && Number(layoutOverride.subtitleSpacing) !== 0
+      ? { captionSpacing: layoutOverride.subtitleSpacing } : {}),
+    ...(layoutOverride?.subtitleShadow === false ? { captionShadow: false } : {}),
     // 자막 위치·크기·색 — 규칙 layout 의 subtitle* 를 editorState 의 caption* 로 옮긴다.
     // 미리보기(template-preview)와 서버 렌더(index.ts buildEditorAss)가 **같은 값**을 본다
     // (overlay-parity.test.ts 가 두 경로가 갈라지지 않게 강제). captionsOn(자막 on/off)은

@@ -43,6 +43,8 @@ export type OverlayTextItem = {
   color: string;
   /** 0~1. 부가줄(text-white/80) 등. */
   opacity?: number;
+  /** 자간(출력 px · CSS letter-spacing 미러 · ASS \fsp 와 같은 축). 없으면 0. */
+  letterSpacing?: number;
   /** 부드러운 그림자 (미리보기 textShadow 미러). 없으면 그림자 없음. */
   shadow?: { offsetX?: number; offsetY: number; blur: number; color: string };
   /** 외곽선(스트로크). 미리보기 -webkit-text-stroke 미러. width 는 출력 px. 없으면 외곽선 없음. */
@@ -276,6 +278,8 @@ export async function renderTextLayerPng(input: RenderTextLayerInput): Promise<B
     const family = spec && registered.has(spec.family) ? spec.family : "sans-serif";
     // 폰트 스택에 이모지·sans-serif 폴백을 붙여 한글 외 글자도 깨지지 않게.
     ctx.font = `${Math.max(1, Math.round(it.fontPx))}px "${family}", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+    // 자간 — 미리보기 CSS letter-spacing · ASS \fsp 와 같은 축(출력 px). 매 아이템 리셋(누수 방지).
+    ctx.letterSpacing = `${Number.isFinite(it.letterSpacing) ? Number(it.letterSpacing) : 0}px`;
     ctx.textAlign = it.align ?? "left";
     ctx.textBaseline = it.baseline ?? "top";
     ctx.globalAlpha = it.opacity != null ? Math.max(0, Math.min(1, it.opacity)) : 1;

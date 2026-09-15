@@ -146,9 +146,10 @@ describe("제목 — 지마켓 산스 + 레퍼런스 강조색", () => {
     assert.match(overlay, /700: \{ file: "GmarketSansTTFBold\.ttf"/);
   });
 
-  it("자동배포 미리보기도 같은 글꼴로 그린다", () => {
+  it("자동배포 미리보기도 같은 글꼴로 그린다 (captionFont 픽커 · 기본은 여전히 지마켓)", () => {
     const preview = read("apps/web/src/components/automation/template-preview.tsx");
-    assert.match(preview, /fontFamily: "'GmarketSans', var\(--font-sans\)"/);
+    // 2026-09-15: 자막 글꼴 픽커가 붙어 기본값이 ?? 폴백으로 옮겨갔다 — 기본은 그대로 지마켓.
+    assert.match(preview, /fontFamily: fontFamilyCss\(layout\.captionFont\) \?\? "'GmarketSans', var\(--font-sans\)"/);
   });
 });
 
@@ -218,9 +219,10 @@ describe("글꼴 카탈로그 — 레지스트리·ASS 이름·픽커·@font-fac
 });
 
 describe("미리보기도 같은 서체 — 미리보기와 결과물이 갈라지지 않게", () => {
-  it("에디터 자막 미리보기가 GmarketSans 를 쓴다", () => {
+  it("에디터 자막 미리보기가 GmarketSans 를 쓴다 (captionFont 픽커 · 기본은 여전히 지마켓)", () => {
     const preview = read("apps/web/src/components/editor/editor-preview.tsx");
-    assert.match(preview, /fontFamily: "'GmarketSans', var\(--font-sans\)"/);
+    // 2026-09-15: 자막 글꼴 픽커가 붙어 기본값이 ?? 폴백으로 옮겨갔다 — 기본은 그대로 지마켓.
+    assert.match(preview, /fontFamily: fontFamilyCss\(state\.captionFont\) \?\? "'GmarketSans', var\(--font-sans\)"/);
   });
 
   it("웹에 그 @font-face 가 실제로 있다 — 없으면 미리보기만 조용히 폴백한다", () => {
@@ -228,5 +230,17 @@ describe("미리보기도 같은 서체 — 미리보기와 결과물이 갈라�
     assert.match(css, /font-family: "GmarketSans"/);
     assert.match(css, /GmarketSansTTFBold\.ttf/);
     assert.ok(fs.existsSync(path.resolve(REPO, "apps/web/public/fonts/GmarketSansTTFBold.ttf")));
+  });
+
+  it("글꼴 미지정 제목의 편집중 CSS 기본이 렌더 기본(Pretendard)과 같다", () => {
+    // 렌더는 font 미지정을 Pretendard ExtraBold 로 굽는다(overlay-canvas familyById 폴백).
+    // 예전 편집중 CSS 는 fontFamily 를 안 걸어 Outfit/Spoqa 로 보였다 — 2026-09-15 일치시킴.
+    const preview = read("apps/web/src/components/editor/editor-preview.tsx");
+    assert.match(preview, /fontFamily: fontFamilyCss\(line\.font\) \?\? "'Pretendard', var\(--font-sans\)"/,
+      "제목 CSS 기본 글꼴이 Pretendard 가 아니면 미지정 제목이 편집 중에만 다른 서체로 보인다");
+    const css = read("apps/web/src/app/globals.css");
+    assert.match(css, /font-family: "Pretendard"/, "웹에 Pretendard @font-face 가 없다");
+    assert.ok(fs.existsSync(path.resolve(REPO, "apps/web/public/fonts/Pretendard-ExtraBold.otf")),
+      "public/fonts/Pretendard-ExtraBold.otf 가 없다 — @font-face 가 404 로 조용히 폴백한다");
   });
 });

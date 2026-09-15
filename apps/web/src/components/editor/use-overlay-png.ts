@@ -46,6 +46,9 @@ function titleContentKey(s: EditorState): string {
   return JSON.stringify({
     aspect: s.aspect,
     align: s.titleAlign,
+    // 제목 스타일(2026-09-15) — 자간·행간·그림자도 PNG 픽셀에 구워진다. 키에 없으면
+    // 슬라이더를 움직여도 PNG 가 재요청되지 않아 "바꿨는데 그대로"가 된다.
+    sp: s.titleSpacing ?? 0, lh: s.titleLineHeight ?? 1.15, sh: s.titleShadow !== false,
     lines: (s.titleLines ?? []).map((l) => ({
       t: l.text, sz: l.size, c: l.color,
       f: l.font ?? null,

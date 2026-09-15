@@ -1120,6 +1120,22 @@ export interface AutomationRule {
     title?: boolean;
     logo?: boolean;
     timebox?: boolean;
+    // ── 제목·자막 스타일 (2026-09-15 템플릿 설정 확장 · LayoutState 와 1:1) ────────
+    /** 제목/자막 글꼴(카탈로그 id · 서버 FONT_FAMILIES). 미지정 = 기본(지마켓 산스). */
+    titleFont?: string;
+    captionFont?: string;
+    /** 제목 크기(% · 기본 100) — 시드 106/107px 출력값에 곱하는 배율. */
+    titleSize?: number;
+    /** 제목 자간(출력 px · 기본 0). */
+    titleSpacing?: number;
+    /** 제목 행간(배수 · 기본 1.15 = 서버 렌더 기본). */
+    titleLineHeight?: number;
+    /** 제목 그림자 — 미지정 = 켬. */
+    titleShadow?: boolean;
+    /** 자막 자간(출력 px · 기본 0). */
+    subtitleSpacing?: number;
+    /** 자막 그림자 — 미지정 = 켬(스타일 기본). */
+    subtitleShadow?: boolean;
   };
   /**
    * 자동 생성 숏폼의 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계.

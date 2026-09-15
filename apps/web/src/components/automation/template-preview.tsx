@@ -10,7 +10,10 @@
  */
 import { useEffect, useState } from "react";
 import type { FrameTemplate } from "@/lib/data/api";
-import { getAspectPreset } from "@/lib/editor/aspect-presets";
+import { ASPECT_PRESETS, getAspectPreset } from "@/lib/editor/aspect-presets";
+import { FONT_FAMILY_OPTIONS, fontFamilyCss } from "@/lib/editor/presets";
+// 세로 배치 후보는 순방 판정과 같은 목록(RULE_ASPECTS)에서 거른다 — 화면에 사본을 두지 않는다.
+import { RULE_ASPECTS } from "@server-pure/pipeline/automation";
 
 export type LayoutState = {
   titleY: number;
@@ -29,7 +32,68 @@ export type LayoutState = {
   title?: boolean;
   logo?: boolean;
   timebox?: boolean;
+  // ── 제목·자막 스타일 (2026-09-15 템플릿 설정 확장) ─────────────────────────────
+  // 미지정 = 전부 기본(종전과 동일 렌더). 소비: factory.autoEditorState layoutOverride.
+  /** 제목 글꼴(카탈로그 id · 서버 FONT_FAMILIES). 미지정 = 기본(지마켓 산스). */
+  titleFont?: string;
+  /** 제목 크기(% · 기본 100) — 시드 106/107px 출력값에 곱하는 배율(factory titleScale). */
+  titleSize?: number;
+  /** 제목 자간(출력 px · 기본 0 · 서버 es.titleSpacing → PNG letterSpacing / ASS \fsp). */
+  titleSpacing?: number;
+  /** 제목 행간(배수 · 기본 1.15 — 서버 layoutTitleLines 와 1:1). */
+  titleLineHeight?: number;
+  /** 제목 그림자 — 미지정 = 켬(종전과 동일). false 만 의미가 있다. */
+  titleShadow?: boolean;
+  /** 자막 글꼴(카탈로그 id). 미지정 = 기본(지마켓 산스 · 서버 captionAssStyle 기본). */
+  captionFont?: string;
+  /** 자막 자간(출력 px · es.captionSpacing → ASS \fsp). 기본 0. */
+  subtitleSpacing?: number;
+  /** 자막 그림자 — 미지정 = 켬(스타일 기본). false 면 ASS Shadow 0. */
+  subtitleShadow?: boolean;
 };
+
+/**
+ * 제목 스타일 기본값 — 서버 렌더 기본과 **1:1**. 크기 100% = factory 시드 106/107px 그대로 ·
+ * 행간 1.15 = 서버 layoutTitleLines 기본 · 자간 0 · 그림자 켬(buildStaticOverlayItems 기본).
+ */
+export const TITLE_STYLE_DEFAULTS = { size: 100, spacing: 0, lineHeight: 1.15, shadow: true } as const;
+
+/**
+ * 배치 미니 도해 — **원본 그대로**(automation D:1020·1040·1061·1082 · page.tsx 에서 이동).
+ * 프리셋 `rect` 환산 대신 원본 도해를 쓴다 — **프리셋 4종 고정** 전제가 붙는다.
+ * `RULE_ASPECTS` 에 배치가 늘거나 `rect` 가 바뀌면 여기 도해도 같이 고쳐야 한다.
+ */
+const GLYPH_BOX = "w-6 h-8 rounded shrink-0 p-1 flex";
+function AspectGlyph({ id }: { id: string }) {
+  switch (id) {
+    case "9:16-letterbox": // 세로 · 전체 담기 — 위·아래 레터박스 띠
+      return (
+        <div className={`${GLYPH_BOX} bg-indigo-950 flex-col items-center justify-between border border-indigo-700/50`}>
+          <div className="w-full h-1 bg-[#1C60FF] rounded-xs" />
+          <div className="w-full h-1 bg-[#1C60FF] rounded-xs" />
+        </div>
+      );
+    case "9:16-crop-full": // 세로 · 꽉 채우기 — 여백 없이 꽉 참
+      return (
+        <div className={`${GLYPH_BOX} bg-stone-800 items-center justify-center border border-stone-700`}>
+          <div className="w-full h-full bg-stone-600 rounded-xs" />
+        </div>
+      );
+    case "9:16-crop-main": // 세로 · 위 자막띠 — 위 띠 1개
+      return (
+        <div className={`${GLYPH_BOX} bg-stone-900 flex-col justify-between border border-stone-700`}>
+          <div className="w-full h-2 bg-stone-600 rounded-xs" />
+        </div>
+      );
+    default: // 9:16-crop-sub — 세로 · 위아래 띠
+      return (
+        <div className={`${GLYPH_BOX} bg-stone-900 flex-col justify-between border border-stone-700`}>
+          <div className="w-full h-1.5 bg-stone-600 rounded-xs" />
+          <div className="w-full h-1.5 bg-stone-600 rounded-xs" />
+        </div>
+      );
+  }
+}
 
 /**
  * 자막 오버레이 기본값 — 서버 렌더(index.ts buildEditorAss)의 자막 기본과 **1:1**.
@@ -81,7 +145,12 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
   // 제목·시간박스 글자도 **실렌더 출력 px 비율**로 그린다 — 예전엔 고정 7px 스케일이라
   // (화면 높이의 ~3.3%) 실렌더(첫 줄 106px/1920 = 5.5%)보다 40% 작게 보였고, 블록 윗변은
   // 같아도 글자 덩어리가 달라 "미리보기랑 위치가 다르다"는 체감을 만들었다(2026-08-25).
-  const titleFs = boxH * 106 / 1920;      // factory 시드 첫 줄 106px 출력과 동일 비율
+  // 크기 배율(titleSize% · factory titleScale 과 같은 클램프 50~200)을 곱한다.
+  const titleScale = Math.min(2, Math.max(0.5, (layout.titleSize ?? TITLE_STYLE_DEFAULTS.size) / 100));
+  const titleFs = (boxH * 106 / 1920) * titleScale; // factory 시드 첫 줄 106px 출력과 동일 비율
+  // 자간은 출력 px(1920 높이 기준) 저장값을 미리보기 px 로 환산한다 — 렌더 \fsp·letterSpacing 미러.
+  const titleSp = ((layout.titleSpacing ?? 0) / 1920) * boxH;
+  const subSp = ((layout.subtitleSpacing ?? 0) / 1920) * boxH;
   const timeboxFs = boxH * 66 / 1920;     // 시간박스 22px(설계) × scale 3 = 66px 출력
   return (
     // 원본은 **테두리 없는** 검은 9:16 카드(`rounded-lg border-none`)다.
@@ -102,7 +171,12 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
           style={{
             bottom: `${layout.subtitleY}%`,
             fontSize: subFs, color: layout.subtitleColor,
-            textShadow: "0 1px 3px rgba(0,0,0,.85)", paddingInline: 6 * s,
+            // 글꼴·자간·그림자 = 자막 스타일(2026-09-15). 기본은 지마켓 산스(서버 captionAssStyle
+            // 기본)·자간 0·그림자 켬 — 종전 미리보기와 동일.
+            fontFamily: fontFamilyCss(layout.captionFont) ?? "'GmarketSans', var(--font-sans)",
+            ...(subSp ? { letterSpacing: subSp } : {}),
+            ...(layout.subtitleShadow === false ? {} : { textShadow: "0 1px 3px rgba(0,0,0,.85)" }),
+            paddingInline: 6 * s,
           }}>
           예시 자막입니다
         </div>
@@ -113,12 +187,15 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
         <div className="absolute text-center font-extrabold"
           style={{
             top: `${layout.titleY}%`, left: 4 * s, right: 4 * s,
-            fontSize: titleFs, lineHeight: 1.15, color: "#fff", whiteSpace: "nowrap",
-            textShadow: "0 2px 6px rgba(0,0,0,.5)",
+            // 행간(기본 1.15 = 서버 layoutTitleLines)·자간·그림자 = 제목 스타일(2026-09-15).
+            fontSize: titleFs, lineHeight: layout.titleLineHeight ?? TITLE_STYLE_DEFAULTS.lineHeight,
+            color: "#fff", whiteSpace: "nowrap",
+            ...(titleSp ? { letterSpacing: titleSp } : {}),
+            ...(layout.titleShadow === false ? {} : { textShadow: "0 2px 6px rgba(0,0,0,.5)" }),
             // 제목 글꼴 = 지마켓 산스(고객사 지정 2026-08-28) — factory.ts 가 titleLines 에
             // font:"gmarket" 을 심고 렌더는 그 파일로 굽는다. 미리보기도 같은 글꼴이어야
-            // "미리보기와 결과물이 다르다" 가 안 생긴다.
-            fontFamily: "'GmarketSans', var(--font-sans)",
+            // "미리보기와 결과물이 다르다" 가 안 생긴다. titleFont 를 고르면 그 글꼴로 그린다.
+            fontFamily: fontFamilyCss(layout.titleFont) ?? "'GmarketSans', var(--font-sans)",
           }}>
           훅 첫 줄 텍스트
           <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
@@ -150,8 +227,13 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
 }
 
 /**
- * 위치 조절 슬라이더 — 소형(고급 설정 옆)과 대형 다이얼로그가 같은 목록을 쓴다.
+ * 템플릿 설정 컨트롤 — 소형(고급 설정 옆)과 대형 다이얼로그가 같은 목록을 쓴다.
  * min/max 를 두 곳에 복제하면 한쪽만 고치게 된다.
+ *
+ * 2026-09-15 확장: 섹션 3개로 재편 — **위치 조절**(요소 표시 + 위치 슬라이더) ·
+ * **제목 스타일**(폰트·강조색·크기%·자간·행간·그림자) · **자막 스타일**(폰트·글자색·
+ * 크기·자간·그림자 — 자막 크기는 위치 조절에서 여기로 이동). 전부 rule.layout 으로
+ * 라운드트립되고 factory.autoEditorState → 렌더가 같은 값을 굽는다.
  */
 export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubtitlesChange }: {
   layout: LayoutState;
@@ -165,8 +247,90 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
   const track = (v: number, min: number, max: number) =>
     `linear-gradient(to right, #1C60FF 0%, #1C60FF ${((v - min) / (max - min)) * 100}%, #E2E8F0 ${((v - min) / (max - min)) * 100}%, #E2E8F0 100%)`;
 
+  /** 슬라이더 한 줄 — 옵셔널 키는 기본값(d)으로 그린다. 숫자 필드만 받는다(색·글꼴·불리언 제외). */
+  type NumKey = "titleY" | "channelIconY" | "channelBoxY" | "channelIconSize" | "subtitleY"
+    | "subtitleSize" | "titleSize" | "titleSpacing" | "titleLineHeight" | "subtitleSpacing";
+  const slider = (
+    label: string, key: NumKey, min: number, max: number, step: number,
+    unit: string, digits: number, d?: number,
+  ) => {
+    const v = typeof layout[key] === "number" ? (layout[key] as number) : (d ?? 0);
+    return (
+      <div key={String(key)} className="space-y-0.5">
+        <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] font-semibold">
+          <span>{label} {v.toFixed(digits)}{unit}</span>
+        </div>
+        <input
+          type="range" min={min} max={max} step={step} value={v}
+          onChange={(e) => onChange({ ...layout, [key]: Number(e.target.value) })}
+          style={{ background: track(v, min, max), boxShadow: "none" }}
+          className="w-full accent-[#1C60FF] cursor-pointer appearance-none border-none outline-none focus:outline-none h-1.5 rounded-full"
+        />
+      </div>
+    );
+  };
+
+  /** 색 픽커 한 줄 (제목 강조색·자막 글자색). */
+  const colorRow = (label: string, key: "titleColor" | "subtitleColor") => (
+    <div key={key} className="flex items-center justify-between text-xs font-semibold">
+      <span className="text-[var(--color-text-muted)] flex items-center gap-2">
+        <span>{label}</span>
+        <strong className="text-[var(--color-text-primary)] font-mono">{layout[key]}</strong>
+      </span>
+      <div className="relative">
+        <input
+          type="color" id={`layout-${key}`} value={layout[key]}
+          onChange={(e) => onChange({ ...layout, [key]: e.target.value })}
+          className="sr-only"
+        />
+        <label
+          htmlFor={`layout-${key}`}
+          aria-label={label}
+          style={{ backgroundColor: layout[key] }}
+          className="w-8 h-4 block rounded border border-white/20 cursor-pointer shadow-none"
+        />
+      </div>
+    </div>
+  );
+
+  /** 글꼴 픽커 — 빈 값 = 기본(지마켓 산스 · 서버 렌더 기본과 동일). id 는 서버 카탈로그와 1:1. */
+  const fontRow = (label: string, key: "titleFont" | "captionFont") => (
+    <div key={key} className="space-y-1">
+      <div className="text-[11px] text-[var(--color-text-muted)] font-semibold">{label}</div>
+      <select
+        value={layout[key] ?? ""}
+        onChange={(e) => onChange({ ...layout, [key]: e.target.value || undefined })}
+        aria-label={label}
+        className="w-full h-8 px-2 rounded-lg bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] focus:outline-none transition-colors"
+      >
+        <option value="">기본 (지마켓 산스)</option>
+        {FONT_FAMILY_OPTIONS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+      </select>
+    </div>
+  );
+
+  /** 그림자 체크박스 — 미지정 = 켬(렌더 기본). */
+  const shadowRow = (key: "titleShadow" | "subtitleShadow") => (
+    <label key={key} className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-[var(--color-text-primary)]">
+      <input
+        type="checkbox" checked={layout[key] !== false}
+        onChange={(e) => onChange({ ...layout, [key]: e.target.checked ? undefined : false })}
+        className="w-4 h-4 rounded accent-[#1C60FF]"
+      />
+      <span>그림자</span>
+    </label>
+  );
+
+  const section = (title: string) => (
+    <div className="pt-1 text-xs font-bold text-[var(--color-text-primary)] border-t border-[var(--color-border-subtle)]/60 mt-2 first:mt-0 first:border-t-0 first:pt-0">
+      {title}
+    </div>
+  );
+
   return (
     <div className={className}>
+      {/* ── 위치 조절 ─────────────────────────────────────────────── */}
+      {section("위치 조절")}
       {/* Checkboxes Row — 요소 표시. 고객마다 로고·시간박스·제목·자막을 뺄 수 있다(2026-08-24).
           체크 해제 = 미리보기에서 즉시 사라지고, 저장 시 rule.layout 플래그로 렌더에도 빠진다. */}
       <div className="flex items-center gap-4 flex-wrap text-xs font-bold text-[var(--color-text-primary)]">
@@ -193,66 +357,50 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
       </div>
 
       <div className="space-y-2.5">
-        {([
-          // [라벨, 키, min, max, step, 단위, 소수자리]
-          ["제목 위치", "titleY", 3, 30, 0.5, "%", 0],
-          ["로고 위치", "channelIconY", 60, 92, 0.5, "%", 0],
-          ["시간박스 위치", "channelBoxY", 62, 94, 0.5, "%", 0],
-          ["로고 크기", "channelIconSize", 20, 90, 0.5, "px", 0],
-          // 자막 — 위치(하단 기준 %)·크기(화면 높이 %). 서버 렌더와 같은 축이라 그대로 결과물에 반영된다.
-          ["자막 위치", "subtitleY", 4, 40, 0.5, "%", 0],
-          ["자막 크기", "subtitleSize", 2.5, 7, 0.1, "%", 1],
-        ] as const).map(([label, key, min, max, step, unit, digits]) => (
-          <div key={key} className="space-y-0.5">
-            <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] font-semibold">
-              <span>{label} {layout[key].toFixed(digits)}{unit}</span>
-            </div>
-            <input
-              type="range" min={min} max={max} step={step} value={layout[key]}
-              onChange={(e) => onChange({ ...layout, [key]: Number(e.target.value) })}
-              style={{ background: track(layout[key], min, max), boxShadow: "none" }}
-              className="w-full accent-[#1C60FF] cursor-pointer appearance-none border-none outline-none focus:outline-none h-1.5 rounded-full"
-            />
-          </div>
-        ))}
+        {/* 위치·크기(px)는 서버 렌더와 같은 축이라 그대로 결과물에 반영된다. */}
+        {slider("제목 위치", "titleY", 3, 30, 0.5, "%", 0)}
+        {slider("로고 위치", "channelIconY", 60, 92, 0.5, "%", 0)}
+        {slider("로고 크기", "channelIconSize", 20, 90, 0.5, "px", 0)}
+        {slider("시간박스 위치", "channelBoxY", 62, 94, 0.5, "%", 0)}
+        {slider("자막 위치", "subtitleY", 4, 40, 0.5, "%", 0)}
       </div>
 
-      <div className="space-y-3 pt-2">
-        {/* 제목 강조색 — 렌더 titleLines 강조 줄 색(편집기·factory titleAccent 와 같은 축).
-            자막 색은 서버 렌더의 captionColor 로 옮겨진다. */}
-        {([["제목 색", "titleColor"], ["자막 색", "subtitleColor"]] as const).map(([label, key]) => (
-          <div key={key} className="flex items-center justify-between text-xs font-semibold">
-            <span className="text-[var(--color-text-muted)] flex items-center gap-2">
-              <span>{label}</span>
-              <strong className="text-[var(--color-text-primary)] font-mono">{layout[key]}</strong>
-            </span>
-            <div className="relative">
-              <input
-                type="color" id={`layout-${key}`} value={layout[key]}
-                onChange={(e) => onChange({ ...layout, [key]: e.target.value })}
-                className="sr-only"
-              />
-              <label
-                htmlFor={`layout-${key}`}
-                aria-label={label}
-                style={{ backgroundColor: layout[key] }}
-                className="w-8 h-4 block rounded border border-white/20 cursor-pointer shadow-none"
-              />
-            </div>
-          </div>
-        ))}
+      {/* ── 제목 스타일 ───────────────────────────────────────────── */}
+      {section("제목 스타일")}
+      <div className="space-y-2.5">
+        {fontRow("폰트", "titleFont")}
+        {/* 강조색 — 렌더 titleLines 강조 줄 색(편집기·factory titleAccent 와 같은 축). */}
+        {colorRow("강조색", "titleColor")}
+        {slider("제목 크기", "titleSize", 50, 200, 5, "%", 0, TITLE_STYLE_DEFAULTS.size)}
+        {slider("자간", "titleSpacing", -10, 30, 0.5, "px", 0, TITLE_STYLE_DEFAULTS.spacing)}
+        {slider("행간", "titleLineHeight", 0.8, 2, 0.05, "", 2, TITLE_STYLE_DEFAULTS.lineHeight)}
+        {shadowRow("titleShadow")}
+      </div>
+
+      {/* ── 자막 스타일 ───────────────────────────────────────────── */}
+      {section("자막 스타일")}
+      <div className="space-y-2.5">
+        {fontRow("폰트", "captionFont")}
+        {/* 글자색은 서버 렌더의 captionColor 로 옮겨진다. */}
+        {colorRow("글자색", "subtitleColor")}
+        {slider("자막 크기", "subtitleSize", 2.5, 7, 0.1, "%", 1)}
+        {slider("자간", "subtitleSpacing", -10, 30, 0.5, "px", 0, 0)}
+        {shadowRow("subtitleShadow")}
       </div>
     </div>
   );
 }
 
 /**
- * 대형 미리보기 다이얼로그 — 소형 카드가 실제 결과감을 못 준다는 피드백에서 나왔다.
- * 9:16 프리뷰를 뷰포트 높이 ~80% 로 키우고, 슬라이더를 옆에 둬 움직이면 즉시 반영된다
+ * 템플릿 설정 다이얼로그 — 소형 카드가 실제 결과감을 못 준다는 피드백에서 나왔다.
+ * 9:16 프리뷰를 뷰포트 높이 ~80% 로 키우고, 컨트롤을 옆에 둬 움직이면 즉시 반영된다
  * (부모 layout 상태를 그대로 공유 — 다이얼로그 전용 사본을 만들면 닫을 때 유실된다).
  * 관용구는 upload-video-dialog(오버레이 클릭 닫힘) + billing-ui(ESC window keydown).
+ *
+ * 2026-09-15: "템플릿 설정" 으로 승격 — 레이아웃(세로 영상 배치) 픽커가 고급 설정에서
+ * 여기로 들어왔고(onAspectChange), 제목/자막 스타일 섹션(LayoutSliders)이 붙었다.
  */
-export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onSubtitlesChange, timeboxText, iconSrc, aspect, onLayoutChange, onClose }: {
+export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onSubtitlesChange, timeboxText, iconSrc, aspect, onAspectChange, aspectDisabled, onLayoutChange, onClose }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
@@ -266,6 +414,10 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
   iconSrc?: string;
   /** 세로 영상 배치 — 미리보기의 영상 영역을 이 배치로 그린다. */
   aspect?: string;
+  /** 배치 변경 콜백 — 있으면 레이아웃 픽커 섹션을 그린다("" = 자동 · 영상 템플릿 기본). */
+  onAspectChange?: (id: string) => void;
+  /** 클립(가로) 전용 계획 등 배치가 무의미할 때 픽커를 흐리게 잠근다. */
+  aspectDisabled?: boolean;
   onLayoutChange: (next: LayoutState) => void;
   onClose: () => void;
 }) {
@@ -296,19 +448,65 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="템플릿 대형 미리보기"
+        aria-label="템플릿 설정"
       >
         <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} timeboxText={timeboxText} iconSrc={iconSrc} aspect={aspect} width={w} />
         {/* 컨트롤 컬럼은 **내용 높이**로 둔다. self-stretch 를 걸면 세로로 긴 9:16 프리뷰(≈800px)
             높이에 맞춰 늘어나고, mt-auto 닫기 버튼이 그 바닥까지 밀려 컨트롤과 버튼 사이에 거대한
-            빈 공간이 생긴다(사용자 2026-08-21 "왜 이래 ㅋㅋ"). 프리뷰 위쪽에 정렬(items-start)해 붙인다. */}
-        <div className="flex min-w-[200px] max-w-[240px] flex-col gap-2">
+            빈 공간이 생긴다(사용자 2026-08-21 "왜 이래 ㅋㅋ"). 프리뷰 위쪽에 정렬(items-start)해 붙인다.
+            섹션이 늘어 프리뷰보다 길어질 수 있어 컬럼 자체 스크롤을 준다(프리뷰는 그대로 보인다). */}
+        <div className="flex min-w-[240px] max-w-[340px] max-h-[84vh] flex-col gap-2 overflow-y-auto pr-1">
           <h2 className="text-base font-bold text-[var(--color-text-primary)]">
-            {template?.title || template?.name || "템플릿 미리보기"}
+            템플릿 설정{template?.title || template?.name ? ` — ${template?.title || template?.name}` : ""}
           </h2>
-          <p className="text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-            실제 렌더와 같은 % 좌표로 그립니다 — 슬라이더를 움직이면 저장될 위치가 그대로 바뀝니다.
+          <p className="rounded-lg px-2.5 py-2 text-[11px] leading-relaxed"
+            style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}>
+            여기서 저장한 값은 이 프로그램의 <b style={{ color: "var(--color-text-primary)" }}>모든 영상에 기본으로</b> 고정
+            적용됩니다. 영상별 예외 수정은 배포 예정의 확인·수정(편집)에서 합니다. 미리보기는 실제 렌더와
+            같은 좌표로 그립니다 — 움직이면 저장될 값이 그대로 바뀝니다.
           </p>
+
+          {/* ── 레이아웃 (세로 영상 배치) — 편집기 프리셋과 같은 id·라벨(aspect-presets 정본). ── */}
+          {onAspectChange && (
+            <div className="space-y-1.5" style={aspectDisabled ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
+              <div className="text-xs font-bold text-[var(--color-text-primary)]">
+                레이아웃 <span className="font-medium text-[var(--color-text-muted)]">영상 배치</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onAspectChange("")}
+                className={`w-full rounded-lg px-2.5 py-2 text-left text-[11px] transition-colors border ${
+                  !aspect
+                    ? "border-[#1C60FF] bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10"
+                    : "border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] hover:border-slate-400"
+                }`}
+              >
+                <div className="font-bold text-[var(--color-text-primary)]">자동 (영상 템플릿 기본)</div>
+                <div className="text-[var(--color-text-muted)]">템플릿이 정한 영상창 그대로</div>
+              </button>
+              <div className="grid grid-cols-2 gap-1.5">
+                {ASPECT_PRESETS.filter((p) => (RULE_ASPECTS as readonly string[]).includes(p.id)).map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => onAspectChange(p.id)}
+                    className={`rounded-lg px-2.5 py-2 text-left text-[11px] transition-colors border flex items-center gap-2 ${
+                      aspect === p.id
+                        ? "border-[#1C60FF] bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10"
+                        : "border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] hover:border-slate-400"
+                    }`}
+                  >
+                    <AspectGlyph id={p.id} />
+                    <div className="min-w-0">
+                      <div className="font-bold text-[var(--color-text-primary)]">{p.label.replace(/^세로 · /, "")}</div>
+                      <div className="text-[var(--color-text-muted)]">{p.hint}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <LayoutSliders layout={layout} onChange={onLayoutChange} className="space-y-3.5 text-[11px]"
             subtitlesOn={subtitlesOn} onSubtitlesChange={onSubtitlesChange} />
           <button
