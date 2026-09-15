@@ -125,10 +125,13 @@ export const SUBTITLE_DEFAULTS = { y: 26, size: 4.4, color: "#FFFFFF" } as const
 /** 소형 카드 기준 폭 — 폰트·패딩은 이 폭 대비 비율로 스케일된다(레이아웃 %좌표는 불변). */
 const BASE_W = 120;
 
-export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, timeboxText, iconSrc, aspect, width = BASE_W }: {
+export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, timeboxText, iconSrc, aspect, width = BASE_W, titleLine1, titleLine2 }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
+  /** 실제 오버레이 두 줄(확인·수정 팝업). 미지정 = 예시 문구("훅 첫 줄 텍스트"). */
+  titleLine1?: string;
+  titleLine2?: string;
   /** 영상 영역 배경으로 깔 실제 샘플 프레임(사용자 최근 회차). 없으면 회색 그라디언트 폴백. */
   frameSrc?: string;
   /** 자막 오버레이 표시 여부 — 규칙의 자막 on/off 를 그대로 반영한다(꺼지면 자막이 사라진다). */
@@ -234,8 +237,14 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
             // "미리보기와 결과물이 다르다" 가 안 생긴다. titleFont 를 고르면 그 글꼴로 그린다.
             fontFamily: fontFamilyCss(layout.titleFont) ?? "'GmarketSans', var(--font-sans)",
           }}>
-          훅 첫 줄 텍스트
-          <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
+          {titleLine1 ?? "훅 첫 줄 텍스트"}
+          {/* 커스텀 줄(확인·수정 팝업 — 후보를 고르면 즉시 바뀐다)이 오면 그대로 그린다.
+              둘째 줄이 빈 문자열이면 안 그린다 — 한 줄 문구를 두 줄로 보여주면 안 된다. */}
+          {titleLine1 == null
+            ? <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
+            : titleLine2
+              ? <div style={{ color: layout.titleColor || accent }}>{titleLine2}</div>
+              : null}
         </div>
       )}
       {/* 로고 — 프로그램의 쇼츠 아이콘이 있으면 그대로 보여준다. 실렌더(index.ts)와 같은 규칙:

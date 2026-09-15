@@ -755,9 +755,8 @@ export default function AutomationPage() {
         >
           확인·수정
         </button>
-        {/* ⚠️ className 을 href **앞**에 둔다 — automation.test.ts 가 href 뒤 60자 안에서
-            `>편집<` 를 찾는다. 뒤에 두면 디자이너 클래스(200자)에 밀려 깨진다. */}
-        <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0" href={`/editor/${entry.clipId}`}>편집</Link>
+        {/* 편집기 링크는 확인·수정 팝업 안 "전체 편집기"로 이동(사용자 2026-09-15
+            "편집 누르면 편집기 말고 템플릿 편집하듯 가볍게") — 행에서는 팝업이 편집의 정문이다. */}
         <button
           type="button"
           className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
@@ -2143,7 +2142,6 @@ export default function AutomationPage() {
                           >
                             확인·수정
                           </button>
-                          <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none shrink-0" href={`/editor/${it.clipId}`}>편집</Link>
                         </div>
                       );
                     })}

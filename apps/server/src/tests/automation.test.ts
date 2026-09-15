@@ -342,7 +342,7 @@ describe("승인 대기는 영상 하나당 한 줄", () => {
       "승인이 보류 하나만 풀면 남은 계획이 다음 순방에 다시 잡아 승인이 안 먹은 것처럼 보인다");
   });
 
-  it("미리보기는 렌더 산출물을 재생한다 — 편집기 링크는 '편집' 으로 분리", () => {
+  it("미리보기는 렌더 산출물을 재생한다 — 가벼운 편집은 팝업, 전체 편집기는 팝업 안 링크", () => {
     // 편집기는 원본 위에 오버레이를 **다시 그리는** 화면이라 결과물이 아니다. 승인 여부는
     // 나갈 파일을 보고 정해야 한다(사용자 2026-08-19). clip.mediaId = 자막·오버레이가 이미
     // 구워진 렌더 산출물(index.ts /export 가 여기에 clipMediaId 를 넣는다).
@@ -351,8 +351,17 @@ describe("승인 대기는 영상 하나당 한 줄", () => {
     assert.match(page, /function HeldPreview/, "승인 대기 미리보기 컴포넌트가 없다");
     assert.match(page, /getStreamUrl\(clip\.mediaId\)/,
       "sourceMediaId(원본)를 재생하면 자막·오버레이 없는 원본이 나온다 — 승인 판단이 안 된다");
-    assert.match(page, /href=\{`\/editor\/\$\{entry\.clipId\}`\}[\s\S]{0,60}>편집</,
-      "편집기 링크가 '편집' 버튼으로 분리돼 있어야 한다");
+    // 2026-09-15 변경(사용자 "편집 누르면 편집기 말고 템플릿 편집하듯 가볍게"): 행의 정문은
+    // 확인·수정 팝업(QuickEditDialog)이고, 전체 편집기는 팝업 안 링크로만 나간다 —
+    // 행에서 바로 /editor 로 보내면 가벼운 수정에도 무거운 화면이 뜬다.
+    assert.match(page, /setQuickEditClipId\(/,
+      "행에서 확인·수정 팝업을 여는 경로가 없다");
+    const dialog = fs.readFileSync(
+      path.resolve(SRC, "../../web/src/components/automation/quick-edit-dialog.tsx"), "utf-8");
+    assert.match(dialog, /href=\{`\/editor\/\$\{clip\.id\}`\}/,
+      "팝업 안에 전체 편집기 링크가 없다 — 트림·키프레임 같은 깊은 편집으로 나갈 길이 막힌다");
+    assert.match(dialog, /LayoutSliders/,
+      "팝업에 위치·스타일 슬라이더(템플릿 설정과 같은 컨트롤)가 없다 — '가볍게 편집'이 문구 교체뿐이 된다");
   });
 
   it("기록의 '승인 대기' 줄도 영상 단위로 접는다 — 서버는 채널마다 한 줄을 남긴다", () => {

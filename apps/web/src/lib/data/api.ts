@@ -3021,7 +3021,38 @@ export interface OverlayTitleLine {
 }
 export interface OverlayTitleState {
   titleLines: OverlayTitleLine[];
-  layout?: { aspect?: string | null };
+  /** 콘솔 layout 어휘(서버 GET 이 돌려주는 것) — null = 이 클립엔 값 없음(템플릿 시드).
+   *  키 이름은 규칙 layout(LayoutState)과 1:1 — 확인·수정 팝업이 그대로 슬라이더에 얹는다. */
+  layout?: {
+    aspect?: string | null;
+    titleY?: number | null;
+    channelIconY?: number | null;
+    channelBoxY?: number | null;
+    channelIconSize?: number | null;
+    subtitleY?: number | null;
+    subtitleSize?: number | null;
+    subtitleColor?: string | null;
+    channelBoxColor?: string | null;
+    captionFont?: string | null;
+    titleFont?: string | null;
+    logo?: boolean;
+    subtitles?: boolean;
+    timebox?: boolean;
+    titleSpacing?: number | null;
+    titleLineHeight?: number | null;
+    subtitleSpacing?: number | null;
+    titleShadow?: boolean | null;
+    subtitleShadow?: boolean | null;
+    subtitleShadowX?: number | null;
+    subtitleShadowY?: number | null;
+    subtitleStroke?: boolean | null;
+    subtitleStrokeColor?: string | null;
+    subtitleBg?: boolean | null;
+    subtitleBgColor?: string | null;
+    subtitleBgOpacity?: number | null;
+    timeboxFont?: string | null;
+    timeboxSize?: number | null;
+  };
   rendered: boolean;
 }
 export async function fetchClipOverlayTitle(clipId: string): Promise<OverlayTitleState> {
@@ -3033,7 +3064,11 @@ export async function fetchClipOverlayTitle(clipId: string): Promise<OverlayTitl
  *  색을 유지하려면 {text, color} 로 같이 보내야 한다 — 문자열만 보내면 강조색이 날아간다. */
 export async function patchClipOverlayTitle(
   clipId: string,
-  body: { lines: Array<string | { text: string; color?: string }>; layout?: { aspect?: string } },
+  body: {
+    lines: Array<string | { text: string; color?: string }>;
+    /** 규칙 layout 어휘 — 바뀐 키만 보낸다(서버가 온 것만 editorState 로 옮긴다). */
+    layout?: Record<string, unknown> & { aspect?: string };
+  },
 ): Promise<{ ok: boolean; rerender?: boolean }> {
   return json(
     await fetch(`${API_BASE}/clips/${clipId}/overlay-title`, {
