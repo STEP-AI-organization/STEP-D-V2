@@ -34,6 +34,12 @@ export interface ChannelRule {
   titlePrefix: string;
   /** `#태그 #태그` 형태의 템플릿. `{program}`·{episode} 치환. */
   hashtagTemplate: string;
+  /**
+   * 배포 설명 고정 문구(2026-09-15) — 발행 직전, 동적(생성) 설명 **아래**·커머스 블록 위에
+   * 붙는다. **채널 단위**다: 언어·플랫폼마다 문구가 다르다(인니어 채널의 자막 안내문 등 ·
+   * 틱톡은 캡션이 짧아 꼬리표 한 줄). 소비: worker metaForChannel(publish/description-footer.ts).
+   */
+  descriptionFooter: string;
   tonePreset: string;
   privacy: "public" | "unlisted" | "private";
   /**
@@ -91,6 +97,7 @@ export function defaultRuleFor(role: ChannelRole, platform: string): Omit<Channe
     role,
     titlePrefix: "",
     hashtagTemplate: "",
+    descriptionFooter: "",
     tonePreset: "기본",
     privacy: "public" as const,
     publishDelayMin: DEFAULT_PUBLISH_DELAY_MIN,

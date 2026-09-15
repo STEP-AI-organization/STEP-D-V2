@@ -2880,9 +2880,6 @@ app.patch("/api/programs/:id", async (c) => {
     // recommendPrompt(beat 이어붙여 추천 구간 만들 때 얹는 지시). 소비처: core recommend
     // 프롬프트(program_context.json 경유) + clip-metadata·regenerate-titles. 빈 문자열 = 삭제.
     "titlePrompt", "recommendPrompt",
-    // 배포 설명 고정 문구 — 발행 직전 조립에서 동적 설명 아래·커머스 블록 위에 붙는다.
-    // 소비처: worker metaForChannel + updatemeta + naver (publish/description-footer.ts).
-    "descriptionFooter",
   ] as const;
   for (const k of strFields) {
     const v = body[k];
@@ -7714,6 +7711,8 @@ app.put("/api/channel-rules/:platform/:accountId", async (c) => {
     aspect: ["9:16", "16:9", "any"].includes(String(body.aspect)) ? String(body.aspect) : (existing?.aspect ?? base.aspect),
     titlePrefix: str(body.titlePrefix, existing?.titlePrefix ?? base.titlePrefix),
     hashtagTemplate: str(body.hashtagTemplate, existing?.hashtagTemplate ?? base.hashtagTemplate),
+    // 배포 설명 고정 문구 — 채널 단위 고정글(2026-09-15). 빈 문자열 = 문구 없음(끄기).
+    descriptionFooter: str(body.descriptionFooter, existing?.descriptionFooter ?? base.descriptionFooter),
     tonePreset: str(body.tonePreset, existing?.tonePreset ?? base.tonePreset),
     privacy: ["public", "unlisted", "private"].includes(String(body.privacy))
       ? String(body.privacy)
