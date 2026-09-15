@@ -837,7 +837,11 @@ function sourceBlurGraph(
   const parts: string[] = [];
   let cur = inLabel;
   rects.forEach((r, i) => {
-    const rad = Math.max(4, Math.min(Math.max(12, Math.floor(r.h / 5)), Math.floor(Math.min(r.w, r.h) / 2) - 1));
+    // 반경 상한은 **크로마 평면** 기준(min/4)이다 — yuv420 은 색차 평면이 절반 해상도라
+    // boxblur 가 luma(min/2)보다 먼저 chroma 에서 죽는다. 실측(2026-09-15 프로덕션 실클립):
+    // 예능 잔글씨 56×89 박스에서 "Invalid chroma_param radius value 17, must be <= 14".
+    const cap = Math.max(1, Math.floor(Math.min(r.w, r.h) / 4));
+    const rad = Math.min(Math.max(12, Math.floor(r.h / 5)), cap);
     const s = Math.max(0, r.start + offsetSec);
     const e = Math.max(0, r.end + offsetSec);
     parts.push(`${cur}split[${tag}m${i}][${tag}c${i}]`);
