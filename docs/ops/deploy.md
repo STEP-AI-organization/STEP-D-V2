@@ -173,7 +173,9 @@ YOLO_CAST_MODE=gpu RUN_YOLO_CAST=0 bash deploy/cloud.sh worker
 ```
 
 두 번째 명령은 CPU 워커의 inline 추론을 끄고 `cast.detect`만 GPU VM으로 보낸다.
-VM의 `/api/admin/gebd-vm/wake` 호출 스케줄러가 연결된 뒤에 실행한다.
+**2026-09-15 설치·E2E 완료** — wake 스케줄러(`stepd-gebd-vm-wake` · */10)도 같은 날
+재개했다. ⚠️ 이후의 모든 `cloud.sh worker`/`all` 은 **`YOLO_CAST_MODE=gpu` 를 계속
+넘겨야 한다** — env 미지정이면 스크립트 기본값(inline)이 잡 env 를 되돌린다.
 
 서버와 content 워커 둘 중 한쪽에만 `GCS_UPLOAD_BUCKET`이 들어가면 업로드는 성공해도 워커가
 다른 버킷을 찾아 후처리에 실패한다. `cloud.sh`가 두 대상에 같은 기본값을 넣도록 고정돼 있다.
