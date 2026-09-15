@@ -10414,6 +10414,29 @@ app.get("/api/clips/:id/overlay-title", async (c) => {
     titleAlign: String(es.titleAlign ?? "center"),
     aspectRatio: String(clip.aspectRatio ?? es.aspectRatio ?? ""),
     rendered: clip.rendered !== false,
+    /**
+     * 클립별 배치·위치·색 — **콘솔 layout 어휘로** 돌려준다(PATCH 가 받는 것과 같은 이름).
+     * editorState 키(caption*·channelIconOff)를 그대로 내보내면 화면이 저장할 때 쓰는 이름과
+     * 달라, 같은 값을 두 이름으로 다루게 된다.
+     *
+     * `null` = **이 클립엔 값이 없다**(= 템플릿 시드를 따른다). 0 과 구분해야 한다 —
+     * 뭉개면 화면이 "0% 로 정해져 있다" 고 보여 준다.
+     */
+    layout: {
+      titleY: typeof es.titleY === "number" ? es.titleY : null,
+      channelIconY: typeof es.channelIconY === "number" ? es.channelIconY : null,
+      channelBoxY: typeof es.channelBoxY === "number" ? es.channelBoxY : null,
+      channelIconSize: typeof es.channelIconSize === "number" ? es.channelIconSize : null,
+      subtitleY: typeof es.captionY === "number" ? es.captionY : null,
+      subtitleSize: typeof es.captionSize === "number" ? es.captionSize : null,
+      subtitleColor: typeof es.captionColor === "string" ? es.captionColor : null,
+      captionFont: typeof es.captionFont === "string" ? es.captionFont : null,
+      channelBoxColor: typeof es.channelBoxColor === "string" ? es.channelBoxColor : null,
+      // 표시 상태 — 저장 모델이 '끄는 축'(channelIconOff)이라 화면 어휘(logo=켜짐)로 뒤집어 준다.
+      logo: es.channelIconOff === true ? false : true,
+      subtitles: es.captionsOn === true,
+      timebox: String(es.channelBoxText ?? "").trim() !== "",
+    },
   });
 });
 
@@ -10490,9 +10513,42 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
     ...(l.shadow !== undefined ? { shadow: l.shadow } : {}),
   }));
 
+  // ── 클립별 배치·위치·색 (선택) ─────────────────────────────────────────────
+  // 목업(2026-09-08)이 3단계의 "영상 템플릿·영상 배치" 를 팝업으로 옮겼다 — 배치·위치·색은
+  // **계획이 아니라 영상마다** 정하는 게 맞다는 판단이다. 계획 layout 은 새 클립의 시드로 남고,
+  // 이미 만들어진 클립은 여기서 고친다.
+  //
+  // 어휘는 **콘솔의 layout 과 같게** 받고(titleY·subtitleY…) editorState 키로 옮긴다 —
+  // factory 의 `layoutOverride` 매핑과 같은 표다. 두 벌이 되면 "계획에서 고른 것과 팝업에서
+  // 고친 것" 이 다른 자리에 저장돼 화면이 설명 못 하는 상태가 된다.
+  const lay = (b as any).layout;
+  const esPatch: Record<string, unknown> = {};
+  if (lay && typeof lay === "object") {
+    const put = (k: string, v: unknown) => { if (v !== undefined && v !== null) esPatch[k] = v; };
+    put("titleY", num(lay.titleY, 100));
+    put("channelIconY", num(lay.channelIconY, 100));
+    put("channelBoxY", num(lay.channelBoxY, 100));
+    put("channelIconSize", num(lay.channelIconSize, 400));
+    // 자막은 콘솔에서 subtitle*, editorState 에선 caption* 이다(factory 와 같은 옮김).
+    put("captionY", num(lay.subtitleY, 100));
+    put("captionSize", num(lay.subtitleSize, 100));
+    if (hex6(lay.subtitleColor)) esPatch.captionColor = hex6(lay.subtitleColor);
+    if (hex6(lay.channelBoxColor)) esPatch.channelBoxColor = hex6(lay.channelBoxColor);
+    if (FONT_FAMILIES.some((f) => f.id === String(lay.captionFont ?? ""))) {
+      esPatch.captionFont = String(lay.captionFont);
+    }
+    // 표시 토글 — 로고는 `channelIconOff`(아이콘만 끄는 축 · showChannel 을 끄면 시간박스까지
+    // 죽는다), 자막은 `captionsOn`. 불리언이 **온 경우에만** 건드린다.
+    if (typeof lay.logo === "boolean") esPatch.channelIconOff = !lay.logo;
+    if (typeof lay.subtitles === "boolean") esPatch.captionsOn = lay.subtitles;
+    // 시간박스는 문구(channelBoxText)가 있어야 그려진다 — 끄기만 지원한다. 켜려면 프로그램
+    // 편성 문구가 필요해서, 여기서 되살리면 빈 박스가 나간다.
+    if (lay.timebox === false) esPatch.channelBoxText = "";
+  }
+
   await putEntity("clip", clipId, {
     ...clip,
-    editorState: { ...es, titleLines: nextLines },
+    editorState: { ...es, ...esPatch, titleLines: nextLines },
     // 다시 구워야 한다는 표시. 아래에서 바로 굽고, 실패해도 순방이 안전망으로 다시 집어 간다.
     rendered: false,
   });
