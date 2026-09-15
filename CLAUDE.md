@@ -111,6 +111,13 @@ youtube : channel.analyze · video.analyze · video.hotwatch · video.comments �
           → 짧고 API 쿼터 위주. Cloud Run Job `stepd-worker-youtube`
 gebd    : gebd.detect
           → GPU L4 spot VM 전용. GPU 없는 데서 claim 하면 Docker mmaction2 를 못 돌린다
+cast    : cast.detect
+          → **같은 GPU VM** 의 별도 systemd 서비스(stepd-worker-cast · venv /opt/stepd-cast-venv).
+            content 가 gpu 모드(YOLO_CAST_MODE=gpu)면 inline YOLO 대신 이 잡을 큐잉하고,
+            VM 이 beats.json+등록 인물사진을 받아 YOLO26n+ArcFace 로 cast_detections.json 을
+            올린 뒤 content.analyze 를 재큐한다. wake 라우트·유휴 판정이 cast.detect 도 본다.
+            2026-09-15 나미브 실회차 E2E 통과 · 설치 절차와 함정 셋(파이썬 rc1·ffmpeg·pnpm)은
+            deploy/gebd/setup-cast-lane.sh 주석에
 naver   : naver.publish · naver.login
           → 사무실 상시 PC 전용. 네이버는 공개 업로드 API 가 없어 Playwright 자동화인데,
             해외 데이터센터 IP 로 로그인하면 캡차·2차인증에 막힌다 → 한국 IP 필요
