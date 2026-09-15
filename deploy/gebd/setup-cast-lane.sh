@@ -1,19 +1,88 @@
 #!/usr/bin/env bash
 # Install and register the YOLO/ArcFace cast lane on the existing L4 VM.
 # GEBD stays in its own Docker image; this lane uses a separate Python venv.
+#
+# 2026-09-15 실측 반영 — 처음 설치해 보며 잡은 것 둘:
+#  ① 라이브 VM 은 vm-startup.sh(메타데이터) 세대라 systemd cloud-sql-proxy.service 도
+#     /etc/stepd/worker.env 도 **없다**. 전제하지 말고 없으면 만든다(있으면 그대로 둔다).
+#  ② systemd 는 **EnvironmentFile 이 Environment= 를 덮는다**(man systemd.exec).
+#     worker.env 의 CORE_PYTHON(core/.venv)이 cast venv 지정을 조용히 덮어 cast 잡이
+#     YOLO 없는 파이썬으로 돌게 된다 → cast 전용 값은 **뒤에 읽히는 두 번째
+#     EnvironmentFile(cast.env)** 로 넣는다.
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/stepd}"
 CAST_VENV="${CAST_VENV:-/opt/stepd-cast-venv}"
-sudo apt-get update -qq
-sudo apt-get install -y -qq python3-venv python3-dev build-essential
+SQL_INSTANCE="${SQL_INSTANCE:-step-d:us-central1:stepd-db}"
 
-sudo python3 -m venv "$CAST_VENV"
+# ── 0. 전제 조건 — vm-startup.sh 세대 VM 에는 없어서 여기서 채운다 ──────────────
+if [ ! -f /etc/systemd/system/cloud-sql-proxy.service ]; then
+  echo "==> cloud-sql-proxy.service 없음 — 설치 (vm.sh 와 동일 유닛)"
+  if [ ! -x /usr/local/bin/cloud-sql-proxy ]; then
+    curl -fsSL -o /tmp/csp \
+      "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64"
+    sudo install -m 0755 /tmp/csp /usr/local/bin/cloud-sql-proxy
+  fi
+  sudo tee /etc/systemd/system/cloud-sql-proxy.service >/dev/null <<EOF
+[Unit]
+Description=Cloud SQL Auth Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/cloud-sql-proxy --address 127.0.0.1 --port 5432 ${SQL_INSTANCE}
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo systemctl daemon-reload
+  # vm-startup.sh 가 nohup 으로 띄운 프록시가 5432 를 점유 중이면 systemd 쪽이 못 뜬다
+  sudo pkill -f cloud-sql-proxy || true
+  sleep 2
+  sudo systemctl enable --now cloud-sql-proxy.service
+fi
+
+if [ ! -f /etc/stepd/worker.env ]; then
+  echo "==> /etc/stepd/worker.env 없음 — env.sh 로 생성"
+  APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/worker-vm/env.sh"
+fi
+
+# ── 1. cast 전용 venv ───────────────────────────────────────────────────────
+# ⚠️ requirements 핀(numpy==2.4.6 등)은 프로덕션 content 이미지(bookworm·python3.11)와
+# 같은 판이다. 이 VM(Ubuntu 22.04)의 기본 python3 은 3.10 이라 numpy 2.4 배포판이
+# 아예 없다(Requires-Python >=3.11 · 2026-09-15 설치 중 실측) → deadsnakes 로 3.11 을
+# 깔아 프로덕션과 파이썬 판을 맞춘다. 3.11 이 이미 있는 머신에선 PPA 를 건드리지 않는다.
+sudo apt-get update -qq
+if ! command -v python3.11 >/dev/null 2>&1; then
+  sudo apt-get install -y -qq software-properties-common
+  sudo add-apt-repository -y ppa:deadsnakes/ppa
+  sudo apt-get update -qq
+fi
+sudo apt-get install -y -qq python3.11 python3.11-venv python3.11-dev build-essential
+
+sudo python3.11 -m venv "$CAST_VENV"
 sudo "$CAST_VENV/bin/pip" install --no-cache-dir --upgrade pip
 sudo "$CAST_VENV/bin/pip" install --no-cache-dir \
   "numpy==2.4.6" "opencv-contrib-python-headless==4.14.0.94" \
   -r "$APP_DIR/core/requirements-yolo.txt"
 
+# ── 2. cast 전용 env — worker.env 를 덮어야 하는 값은 전부 여기에 ────────────────
+sudo tee /etc/stepd/cast.env >/dev/null <<EOF
+WORKER_JOBS=cast
+WORKER_MODE=drain
+CORE_PYTHON=${CAST_VENV}/bin/python
+CORE_DIR=${APP_DIR}
+YOLO_CAST_MODE=gpu
+RUN_YOLO_CAST=1
+YOLO_CAST_DEVICE=0
+YOLO_CAST_FACE_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
+EOF
+sudo chmod 600 /etc/stepd/cast.env
+
+# ── 3. systemd 유닛 ─────────────────────────────────────────────────────────
 sudo tee /etc/systemd/system/stepd-worker-cast.service >/dev/null <<EOF
 [Unit]
 Description=STEP-D queue worker (registered cast YOLO lane · L4 GPU)
@@ -23,14 +92,7 @@ Requires=cloud-sql-proxy.service
 [Service]
 WorkingDirectory=${APP_DIR}/apps/server
 EnvironmentFile=/etc/stepd/worker.env
-Environment=WORKER_JOBS=cast
-Environment=WORKER_MODE=drain
-Environment=CORE_PYTHON=${CAST_VENV}/bin/python
-Environment=CORE_DIR=${APP_DIR}
-Environment=YOLO_CAST_MODE=gpu
-Environment=RUN_YOLO_CAST=1
-Environment=YOLO_CAST_DEVICE=0
-Environment=YOLO_CAST_FACE_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
+EnvironmentFile=/etc/stepd/cast.env
 ExecStart=/usr/bin/npx tsx src/worker.ts --drain
 Restart=on-failure
 RestartSec=10
