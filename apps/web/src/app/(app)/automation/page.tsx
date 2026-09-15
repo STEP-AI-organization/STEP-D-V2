@@ -51,7 +51,7 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 // 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
 // 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
 import {
-  UPLOAD_PLATFORMS, formatWeekdays, isAllDayWindow, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
+  UPLOAD_PLATFORMS, formatWeekdays, isAllDayWindow, isPublishDay, kstMinutes, monthlyPublishEstimate, perDayCount, ruleSlots,
   slotLabel, type RuleAspect, type RuleSlot,
 } from "@server-pure/pipeline/automation";
 // 배치 픽커(레이아웃)는 템플릿 설정 다이얼로그(template-preview.tsx)로 이동 — RULE_ASPECTS·
@@ -626,6 +626,170 @@ export default function AutomationPage() {
   }, [holds]);
   const heldCount = heldClips.length;
 
+  // ── 배포 예정 (스케줄·대기 통합 · AENA 통합목업 2026-09-15) ─────────────────────
+  // 날짜 → 계획·슬롯 → 배정 영상 **전망**을 그린다. 실제 배정은 순방이 슬롯 경과 시점에
+  // 확정하므로 여기 순서는 예측이다 — 순방과 같은 대기열(그 계획의 미배포 자동 클립 ·
+  // 생성순)이라 대개 일치하지만, 순방 직전 승인/거부가 바뀌면 달라질 수 있다.
+  // 수정 마감(게시 1시간 전 · 목업 "수정 가능 ~17:00")은 **화면 안내**다 — 저장 자체를
+  // 서버가 막지는 않는다(재렌더 50~90초가 슬롯을 넘길 수 있어 사람을 미리 세운다).
+  const upcomingSchedule = useMemo(() => {
+    type Item = { clipId: string; held: boolean; editLocked: boolean; rendered: boolean };
+    type SlotGroup = { key: string; label: string; note: string; items: Item[]; shortBy: number };
+    type DayGroup = { key: string; label: string; editUntil: string | null; slots: SlotGroup[] };
+    const WD = ["일", "월", "화", "수", "목", "금", "토"];
+    const heldIds = new Set(heldClips.map((e) => e.clipId));
+    const nowMin = kstMinutes();
+    const slotMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+    const fmtHm = (min: number) => `${String(Math.floor(((min % 1440) + 1440) % 1440 / 60)).padStart(2, "0")}:${String(((min % 60) + 60) % 60).padStart(2, "0")}`;
+    const days = new Map<string, DayGroup>();
+    for (const r of rules.filter((x) => x.enabled)) {
+      // 순방과 같은 대기열 — 이 계획이 만든, 아직 어느 채널로도 안 나간 클립(생성순).
+      const queue = clips
+        .filter((c) => (c as { automationRuleId?: string }).automationRuleId === r.id
+          && (c.distributions ?? []).length === 0)
+        .sort((a, b) => a.id.localeCompare(b.id));
+      let qi = 0;
+      const slots = [...ruleSlots(r)].sort((a, b) => slotMin(a.time) - slotMin(b.time));
+      const programTitle = programs.find((p) => p.id === programsOf(r)[0])?.title ?? "";
+      for (let d = 0; d < 3; d++) {
+        const date = new Date(Date.now() + d * 86400_000);
+        if (!isPublishDay(r, date)) continue;
+        const dayKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+        const label = `${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}(${WD[date.getDay()]})${d === 0 ? " · 오늘" : ""}`;
+        // 슬롯 계획이면 시각별, 아니면 활동 시간창 하나로 — 개수는 순방 판정과 같은 perDayCount.
+        const daySlots = slots.length
+          ? slots.filter((s) => d > 0 || slotMin(s.time) > nowMin)
+          : [{ time: "", count: perDayCount(r) }];
+        if (!daySlots.length) continue;
+        const day = days.get(dayKey) ?? { key: dayKey, label, editUntil: null, slots: [] };
+        for (const s of daySlots) {
+          const take = queue.slice(qi, qi + s.count);
+          qi += s.count;
+          const editLocked = d === 0 && !!s.time && slotMin(s.time) - nowMin <= 60;
+          const items = take.map((c) => ({
+            clipId: c.id,
+            held: heldIds.has(c.id),
+            editLocked,
+            rendered: (c as { rendered?: boolean }).rendered !== false,
+          }));
+          const heldN = items.filter((i) => i.held).length;
+          day.slots.push({
+            key: `${r.id}:${s.time || "window"}`,
+            label: `${programTitle ? `${programTitle} · ` : ""}${s.time ? `${s.time.slice(0, 2)}시 ${s.time.slice(3, 5)}분 슬롯` : (isAllDayWindow(r) ? "24시간 자동" : `${r.activeStart ?? 0}~${r.activeEnd ?? 24}시 자동`)} · ${s.count}개`,
+            note: heldN > 0 ? `승인 필요 ${heldN}건 — 승인해야 게시` : items.length ? "게시 준비 중" : "",
+            items,
+            shortBy: Math.max(0, s.count - items.length),
+          });
+          if (d === 0 && s.time && !editLocked && day.editUntil === null) {
+            day.editUntil = fmtHm(slotMin(s.time) - 60);
+          }
+        }
+        days.set(dayKey, day);
+      }
+    }
+    return [...days.values()];
+  }, [rules, clips, heldClips, programs]);
+  // 전망(슬롯 배정)에 안 잡힌 대기 건 — 계획이 꺼졌거나 요일 밖이어도 **화면에서 사라지면
+  // 안 된다**(승인을 못 하면 영영 안 나간다). 아래 별도 묶음으로 남긴다.
+  const unscheduledHeld = useMemo(() => {
+    const projected = new Set(upcomingSchedule.flatMap((d) => d.slots.flatMap((s) => s.items.map((i) => i.clipId))));
+    return heldClips.filter((e) => !projected.has(e.clipId));
+  }, [upcomingSchedule, heldClips]);
+  // 승인 대기 카드 — 편성 전망의 슬롯 안(배정된 자리)과 슬롯 미배정 묶음 두 곳에서 같은
+  // 카드를 그린다. 미리보기(나갈 파일 재생)·확인·수정·편집·거부·승인이 전부 이 한 벌이다.
+  const renderHeldCard = (entry: (typeof heldClips)[number]) => {
+    // 원시 clipId 만으론 판단이 안 된다 — 스토어의 클립·계획과 조인해 얼굴을 붙인다.
+    const clip = clips.find((c) => c.id === entry.clipId);
+    // 계획은 부가정보다(사람이 보는 단위는 영상) — 여럿이면 첫 계획의 프로그램만 쓴다.
+    const rule = rules.find((r) => r.id === entry.holds[0]?.ruleId);
+    const ruleProgram = rule
+      ? programs.find((p) => p.id === (rule.programIds?.[0] ?? rule.programId))
+      : undefined;
+    const thumb = clip ? clipThumbSrc(clip) : undefined;
+    const key = entry.clipId;
+    return (
+      <div key={key} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex flex-wrap items-center gap-3 px-3 py-2.5">
+        {thumb ? (
+          // eslint-disable-next-line @next/next/no-img-element -- 서버 동적 프레임(최적화 대상 아님)
+          <img src={thumb} alt="" className="h-12 w-[68px] shrink-0 rounded-[3px] object-cover" />
+        ) : (
+          <div
+            className="grid h-12 w-[68px] shrink-0 place-items-center rounded-[3px] text-[9px]"
+            style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}
+          >
+            no img
+          </div>
+        )}
+        <div className="min-w-[220px] flex-1">
+          <div className="truncate text-xs font-medium" style={{ color: "var(--color-text-primary)" }}>
+            {clip?.title || entry.clipId}
+          </div>
+          <div className="font-mono text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            {clip ? `${Math.round(clip.durationSec)}초 · ` : ""}
+            {ruleProgram?.title ? `자동배포 ${ruleProgram.title} · ` : ""}
+            {/* 계획이 둘 이상 걸린 영상은 그 사실만 짧게 — 승인은 어차피 한 번에 다 푼다. */}
+            {entry.holds.length > 1 ? `채널 연결 ${entry.holds.length}개 · ` : ""}
+            대기 시작 {entry.heldAt?.slice(0, 16).replace("T", " ") || "—"}
+          </div>
+          {/* 사유는 잘리면 판단을 못 한다 — 둘째 줄 전체 폭. 사유가 여럿이면 다 적는다. */}
+          <div className="text-[11px] leading-relaxed" style={{ color: "#D97706" }}>
+            {entry.reasons.join(" · ")}
+          </div>
+        </div>
+        {/* 미리보기 = 나갈 파일 그대로. 승인 버튼이 같은 카드에 남아 있어야
+            보면서 바로 승인한다 — 그래서 새 화면이 아니라 카드 안에서 편다. */}
+        <button
+          type="button"
+          className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+          aria-expanded={previewClipId === entry.clipId}
+          onClick={() => setPreviewClipId(previewClipId === entry.clipId ? null : entry.clipId)}
+        >
+          {previewClipId === entry.clipId ? "미리보기 닫기" : "미리보기"}
+        </button>
+        {/* 확인·수정(목업) — 문구 후보(3형)·배치만 고치는 가벼운 층. 저장 즉시 재렌더. */}
+        <button
+          type="button"
+          className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+          disabled={!clip}
+          onClick={() => setQuickEditClipId(entry.clipId)}
+        >
+          확인·수정
+        </button>
+        {/* ⚠️ className 을 href **앞**에 둔다 — automation.test.ts 가 href 뒤 60자 안에서
+            `>편집<` 를 찾는다. 뒤에 두면 디자이너 클래스(200자)에 밀려 깨진다. */}
+        <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0" href={`/editor/${entry.clipId}`}>편집</Link>
+        <button
+          type="button"
+          className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+          disabled={releasing !== null || rejecting !== null}
+          onClick={() => void reject(entry)}
+          title="이 영상을 현재 자동배포에서 제외합니다"
+        >
+          {rejecting === key ? "거부 중…" : "거부"}
+        </button>
+        <button
+          type="button"
+          className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+          disabled={releasing !== null || rejecting !== null}
+          onClick={() => void release(entry)}
+        >
+          {releasing === key ? "승인 중…" : "승인 — 다음 확인 때 게시"}
+        </button>
+        {previewClipId === entry.clipId && (
+          <div className="flex w-full justify-center pt-1">
+            {clip
+              ? <HeldPreview clip={clip} />
+              : (
+                <div className="w-full rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-bg-input)", color: "#D97706" }}>
+                  클립 정보를 찾지 못했습니다 — 목록을 새로고침해 주세요
+                </div>
+              )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // 기록의 '승인 대기' 줄도 같은 기준으로 접는다. 서버는 (계획×클립×**채널**×사유)마다 한 줄을
   // 남기므로 채널이 셋인 계획이면 같은 영상이 여섯 줄까지 뜬다 — 그래서 위 승인 대기 개수와
   // 기록의 승인 대기 줄 수가 안 맞아 보였다(사용자 지적 2026-08-19). 클립당 **가장 최근 한 줄**만
@@ -701,6 +865,27 @@ export default function AutomationPage() {
     return ids;
   }, [visibleRuns, clips]);
   const completedRuns = visibleRuns.filter((run) => completedRunIds.has(run.id));
+  // 완료 — 날짜별 그룹 + 집계 칩(AENA 목업 "완료" 절). 게시 확정만 그룹에 들어가고,
+  // 실패는 칩으로만 센다(실패 행 자체는 위 '최근 처리'가 사유와 함께 보여준다).
+  const doneByDate = useMemo(() => {
+    const WD = ["일", "월", "화", "수", "목", "금", "토"];
+    const groups = new Map<string, { label: string; runs: typeof completedRuns }>();
+    for (const run of completedRuns) {
+      const iso = (run.at ?? "").slice(0, 10);
+      const g = groups.get(iso);
+      if (g) { g.runs.push(run); continue; }
+      const d = iso ? new Date(`${iso}T00:00:00`) : null;
+      const label = d && !Number.isNaN(d.getTime())
+        ? `${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}(${WD[d.getDay()]})`
+        : "날짜 미상";
+      groups.set(iso, { label, runs: [run] });
+    }
+    return [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([, g]) => g);
+  }, [completedRuns]);
+  const failedRunCount = useMemo(
+    () => visibleRuns.filter((run) => run.result === "failed").length,
+    [visibleRuns],
+  );
   // 할당량 소진류 "안 보냄" 안내는 화면에서 뺀다(사용자 2026-08-24) — 실패도 대기도 아니고
   // 자정(KST)에 저절로 풀리는 정상 정지라, 피드에 쌓이면 진짜 실패·대기를 가린다.
   // 서버 기록(rule_run)은 그대로 남는다 — 순방 dedupe·감사가 그걸 쓴다.
@@ -1887,12 +2072,12 @@ export default function AutomationPage() {
         />
       </section>
 
-      {/* ── 승인 대기 — 사람이 확정하는 지점(F6 Invariant) · ④ 아래 유지 ────── */}
+      {/* ── 예정 — 배포 예정 (스케줄·대기 통합 · AENA 목업) · 사람이 확정하는 지점(F6) ── */}
       {/* id="holds" — 상태 헤더의 "확정 대기(보류)" 딥링크 대상. scroll-mt 로 상단 여백. */}
       <section id="holds" className="flex scroll-mt-4 flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-base font-bold text-[var(--color-text-primary)]">
-            승인 대기 <span className="text-xs text-[var(--color-text-muted)] font-normal">사람 확인이 필요한 건입니다 — 승인해야 다음 확인 때 게시됩니다. 저절로 나가지 않습니다.</span>
+            배포 예정 <span className="text-xs text-[var(--color-text-muted)] font-normal">스케줄·대기 통합 — 승인 대기 건은 사람이 승인해야 다음 확인 때 게시됩니다. 저절로 나가지 않습니다.</span>
           </h3>
           {heldClips.length > 0 && (
             <button
@@ -1905,106 +2090,81 @@ export default function AutomationPage() {
             </button>
           )}
         </div>
-        {heldClips.length === 0 ? (
+        {upcomingSchedule.length === 0 && heldClips.length === 0 ? (
           <div
             className="bg-[var(--color-bg-card)] border-none rounded-2xl p-8 text-center text-xs text-[var(--color-text-muted)] shadow-md shadow-slate-900/5 dark:shadow-none bg-stripes"
           >
-            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "승인 대기 중인 건이 없습니다"}
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "예정된 배포가 없습니다 — 계획을 켜면 여기에 편성이 뜹니다"}
           </div>
         ) : (
-          <div className="flex flex-col gap-1.5">
-            {heldClips.map((entry) => {
-              // 원시 clipId 만으론 판단이 안 된다 — 스토어의 클립·계획과 조인해 얼굴을 붙인다.
-              const clip = clips.find((c) => c.id === entry.clipId);
-              // 계획은 부가정보다(사람이 보는 단위는 영상) — 여럿이면 첫 계획의 프로그램만 쓴다.
-              const rule = rules.find((r) => r.id === entry.holds[0]?.ruleId);
-              const ruleProgram = rule
-                ? programs.find((p) => p.id === (rule.programIds?.[0] ?? rule.programId))
-                : undefined;
-              const thumb = clip ? clipThumbSrc(clip) : undefined;
-              const key = entry.clipId;
-              return (
-                <div key={key} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex flex-wrap items-center gap-3 px-3 py-2.5">
-                  {thumb ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- 서버 동적 프레임(최적화 대상 아님)
-                    <img src={thumb} alt="" className="h-12 w-[68px] shrink-0 rounded-[3px] object-cover" />
-                  ) : (
-                    <div
-                      className="grid h-12 w-[68px] shrink-0 place-items-center rounded-[3px] text-[9px]"
-                      style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}
-                    >
-                      no img
-                    </div>
-                  )}
-                  <div className="min-w-[220px] flex-1">
-                    <div className="truncate text-xs font-medium" style={{ color: "var(--color-text-primary)" }}>
-                      {clip?.title || entry.clipId}
-                    </div>
-                    <div className="font-mono text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                      {clip ? `${Math.round(clip.durationSec)}초 · ` : ""}
-                      {ruleProgram?.title ? `자동배포 ${ruleProgram.title} · ` : ""}
-                      {/* 계획이 둘 이상 걸린 영상은 그 사실만 짧게 — 승인은 어차피 한 번에 다 푼다. */}
-                      {entry.holds.length > 1 ? `채널 연결 ${entry.holds.length}개 · ` : ""}
-                      대기 시작 {entry.heldAt?.slice(0, 16).replace("T", " ") || "—"}
-                    </div>
-                    {/* 사유는 잘리면 판단을 못 한다 — 둘째 줄 전체 폭. 사유가 여럿이면 다 적는다. */}
-                    <div className="text-[11px] leading-relaxed" style={{ color: "#D97706" }}>
-                      {entry.reasons.join(" · ")}
-                    </div>
-                  </div>
-                  {/* 미리보기 = 나갈 파일 그대로. 승인 버튼이 같은 카드에 남아 있어야
-                      보면서 바로 승인한다 — 그래서 새 화면이 아니라 카드 안에서 편다. */}
-                  <button
-                    type="button"
-                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    aria-expanded={previewClipId === entry.clipId}
-                    onClick={() => setPreviewClipId(previewClipId === entry.clipId ? null : entry.clipId)}
-                  >
-                    {previewClipId === entry.clipId ? "미리보기 닫기" : "미리보기"}
-                  </button>
-                  {/* 확인·수정(목업) — 문구 후보(3형)·배치만 고치는 가벼운 층. 저장 즉시 재렌더. */}
-                  <button
-                    type="button"
-                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    disabled={!clip}
-                    onClick={() => setQuickEditClipId(entry.clipId)}
-                  >
-                    확인·수정
-                  </button>
-                  {/* ⚠️ className 을 href **앞**에 둔다 — automation.test.ts 가 href 뒤 60자 안에서
-                      `>편집<` 를 찾는다. 뒤에 두면 디자이너 클래스(200자)에 밀려 깨진다. */}
-                  <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0" href={`/editor/${entry.clipId}`}>편집</Link>
-                  <button
-                    type="button"
-                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    disabled={releasing !== null || rejecting !== null}
-                    onClick={() => void reject(entry)}
-                    title="이 영상을 현재 자동배포에서 제외합니다"
-                  >
-                    {rejecting === key ? "거부 중…" : "거부"}
-                  </button>
-                  <button
-                    type="button"
-                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    disabled={releasing !== null || rejecting !== null}
-                    onClick={() => void release(entry)}
-                  >
-                    {releasing === key ? "승인 중…" : "승인 — 다음 확인 때 게시"}
-                  </button>
-                  {previewClipId === entry.clipId && (
-                    <div className="flex w-full justify-center pt-1">
-                      {clip
-                        ? <HeldPreview clip={clip} />
-                        : (
-                          <div className="w-full rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-bg-input)", color: "#D97706" }}>
-                            클립 정보를 찾지 못했습니다 — 목록을 새로고침해 주세요
-                          </div>
-                        )}
-                    </div>
+          <div className="flex flex-col gap-3">
+            {upcomingSchedule.map((day) => (
+              <div key={day.key} className="flex flex-col gap-1.5">
+                {/* 날짜 헤더 — 목업 "09.16(화) · 수정 가능 ~17:00". 마감은 첫 미래 슬롯 -1시간. */}
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-bold text-[var(--color-text-primary)]">{day.label}</span>
+                  {day.editUntil && (
+                    <span className="text-[11px] text-[var(--color-text-muted)]">수정 가능 ~{day.editUntil}</span>
                   )}
                 </div>
-              );
-            })}
+                {day.slots.map((sg) => (
+                  <div key={sg.key} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none px-3 py-2.5 flex flex-col gap-1.5">
+                    <div className="flex flex-wrap items-baseline gap-2 text-xs">
+                      <span className="font-bold text-[var(--color-text-primary)]">{sg.label}</span>
+                      {sg.note && <span className="text-[11px]" style={{ color: sg.note.startsWith("승인 필요") ? "#D97706" : "var(--color-text-muted)" }}>{sg.note}</span>}
+                    </div>
+                    {sg.items.map((it, idx) => {
+                      const held = heldClips.find((e) => e.clipId === it.clipId);
+                      if (held) return <div key={it.clipId}>{renderHeldCard(held)}</div>;
+                      const clip = clips.find((c) => c.id === it.clipId);
+                      return (
+                        <div key={it.clipId} className="flex flex-wrap items-center gap-2.5 rounded-xl bg-[var(--color-bg-input)]/40 px-3 py-2">
+                          <span className="w-4 shrink-0 text-center font-mono text-[11px] text-[var(--color-text-muted)]">{idx + 1}</span>
+                          <div className="min-w-[200px] flex-1">
+                            <div className="truncate text-xs font-medium text-[var(--color-text-primary)]">{clip?.title || it.clipId}</div>
+                            {clip && (
+                              <div className="font-mono text-[11px] text-[var(--color-text-muted)]">
+                                {Math.round(clip.durationSec)}초{clip.episodeNumber ? ` · ${clip.episodeNumber}회` : ""}
+                              </div>
+                            )}
+                          </div>
+                          {!it.rendered && (
+                            <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">굽는 중</span>
+                          )}
+                          {it.editLocked && (
+                            <span className="px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-[11px] border-none shadow-none">수정 마감</span>
+                          )}
+                          <button
+                            type="button"
+                            className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                            disabled={!clip || it.editLocked}
+                            title={it.editLocked ? "게시 1시간 전 — 재렌더가 슬롯을 넘길 수 있어 수정을 권하지 않습니다" : undefined}
+                            onClick={() => setQuickEditClipId(it.clipId)}
+                          >
+                            확인·수정
+                          </button>
+                          <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none shrink-0" href={`/editor/${it.clipId}`}>편집</Link>
+                        </div>
+                      );
+                    })}
+                    {sg.shortBy > 0 && (
+                      <div className="rounded-xl border border-dashed border-[var(--color-border-subtle)] px-3 py-2 text-center text-[11px] text-[var(--color-text-muted)]">
+                        분석 완료 후 자동 배정 · {sg.shortBy}건 대기
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {unscheduledHeld.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-bold text-[var(--color-text-primary)]">승인 대기 — 슬롯 미배정</span>
+                  <span className="text-[11px] text-[var(--color-text-muted)]">계획이 꺼져 있거나 발행 요일 밖입니다 — 승인은 여기서도 됩니다</span>
+                </div>
+                {unscheduledHeld.map((entry) => renderHeldCard(entry))}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -2251,6 +2411,12 @@ export default function AutomationPage() {
         <div className="mt-4 flex items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--color-border-subtle)" }}>
           <h4 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>✅ 배포 완료 영상</h4>
           <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>실제 채널 게시까지 확인된 영상만 표시합니다</span>
+          {/* 집계 칩(목업) — 게시는 이 목록, 실패는 위 '최근 처리'에 사유와 함께 있다. */}
+          <span className="ml-auto flex items-center gap-1.5">
+            <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">전체 {completedRuns.length + failedRunCount}</span>
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[11px] border-none shadow-none">게시 {completedRuns.length}</span>
+            <span className="px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 font-bold text-[11px] border-none shadow-none">실패 {failedRunCount}</span>
+          </span>
         </div>
         {completedRuns.length === 0 ? (
           <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-8 text-center text-xs text-[var(--color-text-muted)] shadow-md shadow-slate-900/5 dark:shadow-none bg-stripes"
@@ -2258,8 +2424,16 @@ export default function AutomationPage() {
             {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "아직 배포 완료된 영상이 없습니다"}
           </div>
         ) : (
-          <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-4 text-xs shadow-md shadow-slate-900/5 dark:shadow-none divide-y divide-[var(--color-border-subtle)]/60">
-            {completedRuns.map((run) => {
+          <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-4 text-xs shadow-md shadow-slate-900/5 dark:shadow-none flex flex-col gap-1">
+            {/* 날짜별 그룹(목업 "09.08(화) · 4건") — 하루치 묶음 아래 그날의 게시 행들. */}
+            {doneByDate.map((group) => (
+              <div key={group.label} className="flex flex-col">
+                <div className="flex items-baseline gap-2 pt-2 first:pt-0">
+                  <span className="text-xs font-bold text-[var(--color-text-primary)]">{group.label}</span>
+                  <span className="text-[11px] text-[var(--color-text-muted)]">· {group.runs.length}건</span>
+                </div>
+                <div className="divide-y divide-[var(--color-border-subtle)]/60">
+                  {group.runs.map((run) => {
               const clip = clips.find((item) => item.id === run.clipId);
               const platform = run.accountKey?.split(":")[0] ?? "";
               const dist = (clip?.distributions ?? []).find((distribution) => distribution.channel === platform);
@@ -2289,10 +2463,13 @@ export default function AutomationPage() {
                     </div>
                   </div>
                   <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[11px] border-none shadow-none">배포됨</span>
-                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-card)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed">열기</a>}
+                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-card)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed">보기 ↗</a>}
                 </div>
               );
-            })}
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </section>
