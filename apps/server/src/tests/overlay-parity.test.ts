@@ -684,6 +684,22 @@ describe("제목·자막 스타일(자간·행간·그림자) — 시드→렌�
     }
     assert.match(FACTORY, /titleShadow === false \? \{ titleShadow: false \}/, "titleShadow=false 시드가 없다");
     assert.match(FACTORY, /subtitleShadow === false \? \{ captionShadow: false \}/, "subtitleShadow=false 시드가 없다");
+    // 자막 상세·시간박스(2026-09-15 목업) — 저장(라우트 allowlist)→factory→렌더 전 구간이
+    // 이어져 있어야 한다. 한 곳이라도 빠지면 "화면은 바뀌는데 결과물 그대로"다.
+    assert.match(FACTORY, /subtitleStroke === false \? \{ captionStroke: false \}/, "자막 외곽선 끔 시드가 없다");
+    assert.match(FACTORY, /subtitleStrokeColor[\s\S]{0,120}?captionStrokeColor/, "자막 외곽선 색 시드가 없다");
+    assert.match(FACTORY, /subtitleBg === true \? \{\s*captionBg: true/, "자막 배경 박스 시드가 없다");
+    assert.match(FACTORY, /captionShadowX/, "자막 그림자 X 오프셋 시드가 없다");
+    assert.match(FACTORY, /timeboxColor[\s\S]{0,120}?channelBoxColor/, "시간박스 배경색이 channelBoxColor 로 안 접힌다");
+    assert.match(FACTORY, /timeboxFont[\s\S]{0,80}?channelBoxFont/, "시간박스 글꼴 시드가 없다");
+    assert.match(FACTORY, /channelBoxScale/, "시간박스 크기 배율 시드가 없다");
+    assert.match(SERVER, /applyCaptionStyleDetail/, "자막 스타일 행 오버라이드(외곽선·배경)가 렌더에 없다");
+    assert.match(SERVER, /\\\\xshad\$\{Math\.round/, "자막 그림자 X/Y 인라인 태그(\\xshad)가 렌더에 없다");
+    assert.match(SERVER, /channelBoxScale/, "시간박스 크기 배율을 렌더(BoxLabel fs)가 안 읽는다");
+    // 라우트 allowlist — 여기 없는 키는 저장 자체가 안 된다(6708 주석). 새 축이 명단에 있는지.
+    for (const key of ["subtitleShadowX", "subtitleBgOpacity", "subtitleStrokeColor", "subtitleBgColor", "timeboxFont", "timeboxColor", "timeboxSize"]) {
+      assert.ok(SERVER.includes(key), `rule 저장 allowlist 에 ${key} 가 없다 — 화면만 바뀌고 결과물은 그대로가 된다`);
+    }
   });
 
   it("미리보기 3곳(에디터·자동배포)이 같은 기본 행간 1.15 를 쓴다", () => {
@@ -724,8 +740,19 @@ describe("제목·자막 스타일(자간·행간·그림자) — 시드→렌�
       "자동배포 미리보기가 titleLineHeight 를 안 읽는다");
     assert.match(TPL, /layout\.titleShadow === false \? \{\} : \{ textShadow:/,
       "자동배포 미리보기가 titleShadow 를 안 읽는다");
-    assert.match(TPL, /layout\.subtitleShadow === false \? \{\} : \{ textShadow:/,
+    // 2026-09-15 자막 상세: 그림자가 X/Y 오프셋 분기까지 갖게 되면서 한 줄 패턴이 여러 줄이 됐다.
+    assert.match(TPL, /layout\.subtitleShadow === false \? \{\} : \{[\s\S]{0,400}?textShadow:/,
       "자동배포 미리보기가 subtitleShadow 를 안 읽는다");
+    // 자막 상세 축(목업 "자막 스타일"·"시간박스" 절) — 미리보기가 렌더와 같은 값을 읽는지.
+    assert.match(TPL, /layout\.subtitleShadowX/, "자동배포 미리보기가 subtitleShadowX 를 안 읽는다");
+    assert.match(TPL, /layout\.subtitleStrokeColor \? \{ WebkitTextStroke:/,
+      "자동배포 미리보기가 자막 외곽선 색을 안 읽는다");
+    assert.match(TPL, /layout\.subtitleBg === true \? \{\s*background:/,
+      "자동배포 미리보기가 자막 배경 박스를 안 그린다");
+    assert.match(TPL, /background: layout\.timeboxColor \|\| "#3D7BD9"/,
+      "자동배포 미리보기가 시간박스 배경색을 안 읽는다");
+    assert.match(TPL, /layout\.timeboxSize \?\? 100/,
+      "자동배포 미리보기가 시간박스 크기를 안 읽는다");
     assert.match(TPL, /fontFamily: fontFamilyCss\(layout\.titleFont\) \?\? "'GmarketSans', var\(--font-sans\)"/,
       "자동배포 미리보기가 titleFont 를 안 읽는다 — 폰트를 골라도 미리보기는 지마켓 그대로");
   });

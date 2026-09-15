@@ -5758,10 +5758,16 @@ function buildEditorAss(
     if (es.showChannel && boxText) {
       const boxY = Math.round(((Number((es as any).channelBoxY) || 86.5) / 100) * H);
       const boxColor = hexToAss(String((es as any).channelBoxColor || "#3D7BD9"));
-      const fs = assFs(22 * scale);
+      // 시간박스 스타일(2026-09-15 목업) — 글꼴(카탈로그 id → 실제 패밀리명)·크기 배율.
+      // 미지정 = BoxLabel 스타일 그대로(Pretendard ExtraBold · 22px 기준).
+      const boxScale = Number.isFinite((es as any).channelBoxScale) && Number((es as any).channelBoxScale) > 0
+        ? Number((es as any).channelBoxScale) : 1;
+      const boxFont = ASS_FONT_BY_ID[String((es as any).channelBoxFont ?? "")] ?? "";
+      const boxFnTag = boxFont ? `\\fn${boxFont}` : "";
+      const fs = assFs(22 * scale * boxScale);
       pushDecor(0, durSec, (start, finish) =>
         `Dialogue: 0,${assTime(start)},${assTime(finish)},BoxLabel,,0,0,0,,` +
-        `{\\an8\\pos(${Math.round(0.5 * W)},${boxY})\\fs${fs}\\3c${boxColor}\\4c${boxColor}}${assEscape(boxText)}`,
+        `{\\an8\\pos(${Math.round(0.5 * W)},${boxY})\\fs${fs}${boxFnTag}\\3c${boxColor}\\4c${boxColor}}${assEscape(boxText)}`,
       );
     }
     for (const el of Array.isArray(es.elements) ? es.elements : []) {
@@ -5808,6 +5814,16 @@ function buildEditorAss(
     const capSpacingInline = es && typeof es === "object" && Number.isFinite((es as any).captionSpacing)
       && Number((es as any).captionSpacing) !== 0
       ? `\\fsp${Math.round(Number((es as any).captionSpacing))}` : "";
+    // 자막 그림자 오프셋(\xshad·\yshad · 출력 px · 2026-09-15 목업 자막 스타일) — factory 가
+    // 한 축이라도 오면 쌍으로 심는다(축별 오버라이드라 한쪽만 실으면 대각선이 어긋난다).
+    // 미지정 = 태그 없음 → 프리셋 Shadow 깊이 그대로(무회귀). 그림자 끔(captionShadow=false)
+    // 이면 스타일 행이 이미 0 이라 태그를 안 얹는다.
+    const capShadowInline = (() => {
+      if (!es || typeof es !== "object" || (es as any).captionShadow === false) return "";
+      const x = Number((es as any).captionShadowX), y = Number((es as any).captionShadowY);
+      if (!Number.isFinite(x) && !Number.isFinite(y)) return "";
+      return `\\xshad${Math.round(Number.isFinite(x) ? x : 0)}\\yshad${Math.round(Number.isFinite(y) ? y : 2)}`;
+    })();
     // 화면 단위로 끊는다 — STT 세그먼트 한 덩어리(40~60자)가 통째로 뜨면 쇼츠에선 화면 절반이
     // 자막이 된다. 미리보기(editor-shell captionText)가 **같은 함수·같은 상한**으로 끊어 보여준다.
     const capMaxChars = captionMaxCharsOf(es);
@@ -5844,12 +5860,12 @@ function buildEditorAss(
           });
           // \q1 = 그리디 자동 줄바꿈. 스크립트 전역은 WrapStyle 2(줄바꿈 없음)라, 이게 없으면
           // 긴 문장이 미리보기에선 접히고 렌더에선 화면 밖으로 뻗는다.
-          captionEv.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\q1${capSpacingInline}\\1c${white}}${parts.join(" ")}`);
+          captionEv.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\q1${capSpacingInline}${capShadowInline}\\1c${white}}${parts.join(" ")}`);
           prev = we;
         });
       } else {
         // 비카라오케 문장 — 색 오버라이드가 있으면 인라인 \1c(capColorInline)로 얹는다(스타일 PrimaryColour 위에).
-        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,{\\q1${capSpacingInline}${capColorInline}}${assEscape(text)}`);
+        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,{\\q1${capSpacingInline}${capShadowInline}${capColorInline}}${assEscape(text)}`);
       }
     }
   }
@@ -5880,7 +5896,16 @@ function buildEditorAss(
     captionAssStyle(capStyle, H, capMV, capMH, capSizePct,
       typeof (es as any)?.captionFont === "string" ? (es as any).captionFont : undefined,
       // 자막 그림자 끄기 — 자동배포 subtitleShadow=false → es.captionShadow=false (factory).
-      es && typeof es === "object" && (es as any).captionShadow === false)
+      es && typeof es === "object" && (es as any).captionShadow === false,
+      // 자막 상세 스타일(2026-09-15 목업) — 외곽선 색/끔 · 배경 박스(색+불투명도).
+      es && typeof es === "object" ? {
+        strokeOff: (es as any).captionStroke === false,
+        strokeColor: typeof (es as any).captionStrokeColor === "string" ? (es as any).captionStrokeColor : undefined,
+        bg: (es as any).captionBg === true ? {
+          color: typeof (es as any).captionBgColor === "string" ? (es as any).captionBgColor : "#000000",
+          opacity: Number.isFinite((es as any).captionBgOpacity) ? Number((es as any).captionBgOpacity) : 60,
+        } : null,
+      } : undefined)
     + "\n\n" +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
@@ -5959,7 +5984,45 @@ const ASS_FONT_BY_ID: Record<string, string> = {
   recipekorea: "Recipekorea Medium",
 };
 
-function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number, fontId?: string, shadowOff?: boolean): string {
+/**
+ * 자막 상세 오버라이드(2026-09-15 목업 "자막 스타일" 절)를 스타일 행 필드에 적용한다.
+ * Style 행 CSV: Name,Font,fs,Primary,OutlineColour,BackColour,Bold,BorderStyle,Outline,Shadow,…
+ *  - strokeColor → OutlineColour(4) 교체 · strokeOff → Outline(8)=0
+ *  - bg → BorderStyle(7)=3(박스) + BackColour(5)=알파 실은 색. Outline(8)은 박스 패딩이라
+ *    0이면 박스가 글자에 딱 붙는다 — 최소 2를 보장한다.
+ * 미지정(detail 없음/필드 없음)은 프리셋 그대로 — 무회귀가 기본이다.
+ */
+function applyCaptionStyleDetail(
+  line: string,
+  detail?: { strokeOff?: boolean; strokeColor?: string; bg?: { color: string; opacity: number } | null },
+): string {
+  if (!detail || (!detail.strokeOff && !detail.strokeColor && !detail.bg)) return line;
+  const head = "Style: ";
+  if (!line.startsWith(head)) return line;
+  const f = line.slice(head.length).split(",");
+  if (f.length < 15) return line;
+  if (detail.strokeColor && /^#[0-9a-fA-F]{6}$/.test(detail.strokeColor)) {
+    f[4] = hexToAss(detail.strokeColor).replace(/&$/, "");
+  }
+  if (detail.strokeOff) f[8] = "0";
+  if (detail.bg) {
+    const op = Math.min(100, Math.max(0, Number(detail.bg.opacity)));
+    // ASS 알파는 반전(&H00=불투명 · &HFF=투명) — 불투명도 60% → 알파 0x66.
+    const alpha = Math.round((1 - op / 100) * 255).toString(16).toUpperCase().padStart(2, "0");
+    const bgr = hexToAss(/^#[0-9a-fA-F]{6}$/.test(detail.bg.color) ? detail.bg.color : "#000000")
+      .replace(/^&H00/, "").replace(/&$/, "");
+    f[5] = `&H${alpha}${bgr}`;
+    f[7] = "3";
+    if (!(Number(f[8]) > 0)) f[8] = "2";
+  }
+  return head + f.join(",");
+}
+
+function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number, fontId?: string, shadowOff?: boolean,
+  detail?: { strokeOff?: boolean; strokeColor?: string; bg?: { color: string; opacity: number } | null }): string {
+  if (detail) {
+    return applyCaptionStyleDetail(captionAssStyle(style, H, mv, mh, sizePct, fontId, shadowOff), detail);
+  }
   // 자막 서체 = **지마켓 산스 Bold** (사용자 확정 2026-08-28). 바뀌는 건 자막뿐이다 —
   // 제목·방영시간 박스(위 Default·BoxLabel 스타일)는 그대로 Pretendard ExtraBold 다.
   //
@@ -6652,6 +6715,21 @@ app.post("/api/automation/rules", async (c) => {
         ...num("titleSize"), ...num("titleSpacing"), ...num("titleLineHeight"), ...num("subtitleSpacing"),
         ...(typeof l.titleShadow === "boolean" ? { titleShadow: l.titleShadow } : {}),
         ...(typeof l.subtitleShadow === "boolean" ? { subtitleShadow: l.subtitleShadow } : {}),
+        // 자막 상세(2026-09-15 목업 "자막 스타일" 절) — 그림자 오프셋(px)·외곽선(끔+색)·
+        // 배경 박스(색+불투명도). factory 매핑 → es.caption* → captionAssStyle/이벤트 태그.
+        ...num("subtitleShadowX"), ...num("subtitleShadowY"), ...num("subtitleBgOpacity"),
+        ...(typeof l.subtitleStroke === "boolean" ? { subtitleStroke: l.subtitleStroke } : {}),
+        ...(typeof l.subtitleStrokeColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.subtitleStrokeColor)
+          ? { subtitleStrokeColor: l.subtitleStrokeColor } : {}),
+        ...(typeof l.subtitleBg === "boolean" ? { subtitleBg: l.subtitleBg } : {}),
+        ...(typeof l.subtitleBgColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.subtitleBgColor)
+          ? { subtitleBgColor: l.subtitleBgColor } : {}),
+        // 시간박스 스타일(목업 "시간박스" 절) — 글꼴(카탈로그 id)·배경색·크기(%).
+        ...(typeof l.timeboxFont === "string" && FONT_FAMILIES.some((f) => f.id === l.timeboxFont)
+          ? { timeboxFont: l.timeboxFont } : {}),
+        ...(typeof l.timeboxColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.timeboxColor)
+          ? { timeboxColor: l.timeboxColor } : {}),
+        ...num("timeboxSize"),
         ...(typeof l.channelBoxColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.channelBoxColor)
           ? { channelBoxColor: l.channelBoxColor } : {}),
         // 배포 언어 (2026-09-07) — 자막·제목·메타·글꼴이 전부 이 값을 따른다.

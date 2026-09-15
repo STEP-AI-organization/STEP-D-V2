@@ -50,6 +50,26 @@ export type LayoutState = {
   subtitleSpacing?: number;
   /** 자막 그림자 — 미지정 = 켬(스타일 기본). false 면 ASS Shadow 0. */
   subtitleShadow?: boolean;
+  // ── 자막 상세 (2026-09-15 · AENA 통합목업 "자막 스타일" 절) ────────────────────
+  /** 자막 그림자 오프셋(출력 px · ASS \xshad·\yshad). 미지정 = 프리셋 깊이. */
+  subtitleShadowX?: number;
+  subtitleShadowY?: number;
+  /** 자막 외곽선 — false 만 의미(끔 · ASS Outline 0). 미지정 = 프리셋 그대로. */
+  subtitleStroke?: boolean;
+  /** 자막 외곽선 색(#RRGGBB). 미지정 = 프리셋 색(보통 검정). */
+  subtitleStrokeColor?: string;
+  /** 자막 배경 박스(ASS BorderStyle 3) — true 일 때만 색·불투명도가 의미 있다. */
+  subtitleBg?: boolean;
+  subtitleBgColor?: string;
+  /** 배경 불투명도(0~100 · 기본 60). */
+  subtitleBgOpacity?: number;
+  // ── 시간박스 스타일 (목업 "시간박스" 절) ──────────────────────────────────────
+  /** 시간박스 글꼴(카탈로그 id). 미지정 = Pretendard(종전). */
+  timeboxFont?: string;
+  /** 시간박스 배경색(#RRGGBB · 기본 #3D7BD9). */
+  timeboxColor?: string;
+  /** 시간박스 크기(% · 기본 100). */
+  timeboxSize?: number;
 };
 
 /**
@@ -175,10 +195,27 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
             // 기본)·자간 0·그림자 켬 — 종전 미리보기와 동일.
             fontFamily: fontFamilyCss(layout.captionFont) ?? "'GmarketSans', var(--font-sans)",
             ...(subSp ? { letterSpacing: subSp } : {}),
-            ...(layout.subtitleShadow === false ? {} : { textShadow: "0 1px 3px rgba(0,0,0,.85)" }),
-            paddingInline: 6 * s,
+            // 그림자 X/Y(출력 px → 미리보기 px 환산 · ASS \xshad·\yshad 미러). 미지정 = 종전 고정값.
+            ...(layout.subtitleShadow === false ? {} : {
+              textShadow: (layout.subtitleShadowX ?? layout.subtitleShadowY) != null
+                ? `${(((layout.subtitleShadowX ?? 0) / 1920) * boxH).toFixed(1)}px ${(((layout.subtitleShadowY ?? 2) / 1920) * boxH).toFixed(1)}px 3px rgba(0,0,0,.85)`
+                : "0 1px 3px rgba(0,0,0,.85)",
+            }),
+            // 외곽선 — 끔이면 없음, 색만 정하면 그 색(폭은 프리셋 근사 1.4px). 렌더 OutlineColour 미러.
+            ...(layout.subtitleStroke === false ? {}
+              : layout.subtitleStrokeColor ? { WebkitTextStroke: `1.4px ${layout.subtitleStrokeColor}` } : {}),
           }}>
-          예시 자막입니다
+          {/* 배경 박스(ASS BorderStyle 3 미러) — 글자 덩어리에만 붙는다. 라운딩은 ASS 에 없어
+              미리보기도 각지게 둔다(미리보기=결과물). */}
+          <span style={{
+            paddingInline: 6 * s,
+            ...(layout.subtitleBg === true ? {
+              background: `rgba(${parseInt((layout.subtitleBgColor ?? "#000000").slice(1, 3), 16)},${parseInt((layout.subtitleBgColor ?? "#000000").slice(3, 5), 16)},${parseInt((layout.subtitleBgColor ?? "#000000").slice(5, 7), 16)},${((layout.subtitleBgOpacity ?? 60) / 100).toFixed(2)})`,
+              paddingBlock: 2 * s,
+            } : {}),
+          }}>
+            예시 자막입니다
+          </span>
         </div>
       )}
       {/* 제목 2줄 — 각 줄은 한 시각 줄로 고정(nowrap · D). 서버 렌더/에디터와 줄 수 일치.
@@ -216,7 +253,12 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
       {layout.timebox !== false && (
         <div className="absolute left-1/2 -translate-x-1/2 text-center font-bold"
           style={{
-            top: `${layout.channelBoxY}%`, fontSize: timeboxFs, color: "#fff", background: "#3D7BD9",
+            // 시간박스 스타일(2026-09-15 목업) — 글꼴·배경색·크기(%). 렌더 BoxLabel(\fn·\3c·\fs 배율) 미러.
+            top: `${layout.channelBoxY}%`,
+            fontSize: timeboxFs * Math.min(2, Math.max(0.5, (layout.timeboxSize ?? 100) / 100)),
+            color: "#fff",
+            background: layout.timeboxColor || "#3D7BD9",
+            fontFamily: fontFamilyCss(layout.timeboxFont) ?? undefined,
             paddingInline: 4 * s, borderRadius: 2 * s, whiteSpace: "nowrap",
           }}>
           {timeboxText || "(수) 밤 10시 30분"}
@@ -249,7 +291,8 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
 
   /** 슬라이더 한 줄 — 옵셔널 키는 기본값(d)으로 그린다. 숫자 필드만 받는다(색·글꼴·불리언 제외). */
   type NumKey = "titleY" | "channelIconY" | "channelBoxY" | "channelIconSize" | "subtitleY"
-    | "subtitleSize" | "titleSize" | "titleSpacing" | "titleLineHeight" | "subtitleSpacing";
+    | "subtitleSize" | "titleSize" | "titleSpacing" | "titleLineHeight" | "subtitleSpacing"
+    | "subtitleShadowX" | "subtitleShadowY" | "subtitleBgOpacity" | "timeboxSize";
   const slider = (
     label: string, key: NumKey, min: number, max: number, step: number,
     unit: string, digits: number, d?: number,
@@ -386,6 +429,97 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
         {slider("자막 크기", "subtitleSize", 2.5, 7, 0.1, "%", 1)}
         {slider("자간", "subtitleSpacing", -10, 30, 0.5, "px", 0, 0)}
         {shadowRow("subtitleShadow")}
+        {/* 그림자 오프셋(출력 px · ASS \xshad·\yshad) — 그림자를 켠 상태에서만 의미가 있다.
+            목업 "그림자 X 0px · Y 2px". '퍼짐'은 ASS 그림자에 없어 받지 않는다(스키마 주석). */}
+        {layout.subtitleShadow !== false && (
+          <>
+            {slider("그림자 X", "subtitleShadowX", -10, 10, 1, "px", 0, 0)}
+            {slider("그림자 Y", "subtitleShadowY", -10, 10, 1, "px", 0, 2)}
+          </>
+        )}
+        {/* 외곽선 — 끔 + 색(목업 "외곽선 ✓ · 외곽선 색"). 폭은 스타일 프리셋이 정한다. */}
+        <div className="flex items-center gap-4 flex-wrap">
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-[var(--color-text-primary)]">
+            <input
+              type="checkbox" checked={layout.subtitleStroke !== false}
+              onChange={(e) => onChange({ ...layout, subtitleStroke: e.target.checked ? undefined : false })}
+              className="w-4 h-4 rounded accent-[#1C60FF]"
+            />
+            <span>외곽선</span>
+          </label>
+          {layout.subtitleStroke !== false && (
+            <div className="relative flex items-center gap-2 text-xs font-semibold">
+              <strong className="text-[var(--color-text-primary)] font-mono">{layout.subtitleStrokeColor ?? "#000000"}</strong>
+              <input
+                type="color" id="layout-subtitleStrokeColor" value={layout.subtitleStrokeColor ?? "#000000"}
+                onChange={(e) => onChange({ ...layout, subtitleStrokeColor: e.target.value })}
+                className="sr-only"
+              />
+              <label htmlFor="layout-subtitleStrokeColor" aria-label="외곽선 색"
+                style={{ backgroundColor: layout.subtitleStrokeColor ?? "#000000" }}
+                className="w-8 h-4 block rounded border border-white/20 cursor-pointer shadow-none" />
+            </div>
+          )}
+        </div>
+        {/* 배경 박스(ASS BorderStyle 3) — 색 + 불투명도. 라운딩은 ASS 에 없어 두지 않는다. */}
+        <div className="flex items-center gap-4 flex-wrap">
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-[var(--color-text-primary)]">
+            <input
+              type="checkbox" checked={layout.subtitleBg === true}
+              onChange={(e) => onChange({ ...layout, subtitleBg: e.target.checked ? true : undefined })}
+              className="w-4 h-4 rounded accent-[#1C60FF]"
+            />
+            <span>배경색</span>
+          </label>
+          {layout.subtitleBg === true && (
+            <div className="relative flex items-center gap-2 text-xs font-semibold">
+              <strong className="text-[var(--color-text-primary)] font-mono">{layout.subtitleBgColor ?? "#000000"}</strong>
+              <input
+                type="color" id="layout-subtitleBgColor" value={layout.subtitleBgColor ?? "#000000"}
+                onChange={(e) => onChange({ ...layout, subtitleBgColor: e.target.value })}
+                className="sr-only"
+              />
+              <label htmlFor="layout-subtitleBgColor" aria-label="배경색"
+                style={{ backgroundColor: layout.subtitleBgColor ?? "#000000" }}
+                className="w-8 h-4 block rounded border border-white/20 cursor-pointer shadow-none" />
+            </div>
+          )}
+        </div>
+        {layout.subtitleBg === true && slider("배경 투명도", "subtitleBgOpacity", 0, 100, 5, "%", 0, 60)}
+      </div>
+
+      {/* ── 시간박스 (목업 "시간박스" 절 · 2026-09-15) ─────────────────── */}
+      {section("시간박스")}
+      <div className="space-y-2.5">
+        <div className="space-y-1">
+          <div className="text-[11px] text-[var(--color-text-muted)] font-semibold">폰트</div>
+          <select
+            value={layout.timeboxFont ?? ""}
+            onChange={(e) => onChange({ ...layout, timeboxFont: e.target.value || undefined })}
+            aria-label="시간박스 폰트"
+            className="w-full h-8 px-2 rounded-lg bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] focus:outline-none transition-colors"
+          >
+            <option value="">기본 (Pretendard)</option>
+            {FONT_FAMILY_OPTIONS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center justify-between text-xs font-semibold">
+          <span className="text-[var(--color-text-muted)] flex items-center gap-2">
+            <span>배경색</span>
+            <strong className="text-[var(--color-text-primary)] font-mono">{layout.timeboxColor ?? "#3D7BD9"}</strong>
+          </span>
+          <div className="relative">
+            <input
+              type="color" id="layout-timeboxColor" value={layout.timeboxColor ?? "#3D7BD9"}
+              onChange={(e) => onChange({ ...layout, timeboxColor: e.target.value })}
+              className="sr-only"
+            />
+            <label htmlFor="layout-timeboxColor" aria-label="시간박스 배경색"
+              style={{ backgroundColor: layout.timeboxColor ?? "#3D7BD9" }}
+              className="w-8 h-4 block rounded border border-white/20 cursor-pointer shadow-none" />
+          </div>
+        </div>
+        {slider("크기", "timeboxSize", 50, 200, 5, "%", 0, 100)}
       </div>
     </div>
   );

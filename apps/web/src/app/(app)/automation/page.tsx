@@ -408,6 +408,12 @@ export default function AutomationPage() {
         titleFont: prev.titleFont, titleSize: prev.titleSize, titleSpacing: prev.titleSpacing,
         titleLineHeight: prev.titleLineHeight, titleShadow: prev.titleShadow,
         captionFont: prev.captionFont, subtitleSpacing: prev.subtitleSpacing, subtitleShadow: prev.subtitleShadow,
+        // 자막 상세·시간박스 스타일(2026-09-15)도 사용자 선택이다 — 템플릿 기하가 아니므로 유지.
+        subtitleShadowX: prev.subtitleShadowX, subtitleShadowY: prev.subtitleShadowY,
+        subtitleStroke: prev.subtitleStroke, subtitleStrokeColor: prev.subtitleStrokeColor,
+        subtitleBg: prev.subtitleBg, subtitleBgColor: prev.subtitleBgColor,
+        subtitleBgOpacity: prev.subtitleBgOpacity,
+        timeboxFont: prev.timeboxFont, timeboxColor: prev.timeboxColor, timeboxSize: prev.timeboxSize,
       } : { logo: true }),
     }));
   }, [effectiveTemplate]);
@@ -547,6 +553,13 @@ export default function AutomationPage() {
         titleShadow: r.layout.titleShadow,
         captionFont: r.layout.captionFont, subtitleSpacing: r.layout.subtitleSpacing,
         subtitleShadow: r.layout.subtitleShadow,
+        // 자막 상세·시간박스(2026-09-15 목업) — 미지정 = 기본(undefined 그대로 · 저장도 안 된다).
+        subtitleShadowX: r.layout.subtitleShadowX, subtitleShadowY: r.layout.subtitleShadowY,
+        subtitleStroke: r.layout.subtitleStroke, subtitleStrokeColor: r.layout.subtitleStrokeColor,
+        subtitleBg: r.layout.subtitleBg, subtitleBgColor: r.layout.subtitleBgColor,
+        subtitleBgOpacity: r.layout.subtitleBgOpacity,
+        timeboxFont: r.layout.timeboxFont, timeboxColor: r.layout.timeboxColor,
+        timeboxSize: r.layout.timeboxSize,
       });
     }
   }, [selProgram, rules, loading]);

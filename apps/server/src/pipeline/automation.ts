@@ -117,6 +117,29 @@ export interface AutomationRule {
     /** 글꼴(카탈로그 id · overlay-canvas FONT_FAMILIES) — 제목·자막 각각(2026-08-28). */
     titleFont?: string;
     captionFont?: string;
+    // ── 자막 상세 스타일 (2026-09-15 · AENA 통합목업 "자막 스타일" 절) ─────────────
+    // 미지정 = 종전 모양 그대로(무회귀). 렌더 매핑은 factory.autoEditorState → es.caption*.
+    /** 자막 외곽선 — false 만 의미(끔 · ASS Outline=0). 미지정 = 스타일 프리셋 그대로. */
+    subtitleStroke?: boolean;
+    /** 자막 외곽선 색(#RRGGBB). 미지정 = 스타일 프리셋 색(보통 검정). */
+    subtitleStrokeColor?: string;
+    /** 자막 배경 박스 — true 면 ASS BorderStyle=3 박스. 미지정/false = 박스 없음(프리셋 유지). */
+    subtitleBg?: boolean;
+    /** 자막 배경색(#RRGGBB · 기본 #000000)·불투명도(0~100 · 기본 60). */
+    subtitleBgColor?: string;
+    subtitleBgOpacity?: number;
+    /** 자막 그림자 오프셋(출력 px · \xshad·\yshad). 미지정 = 프리셋 깊이 그대로.
+     *  ⚠️ 목업의 '퍼짐(블러)'은 ASS 그림자에 없어 받지 않는다 — libass \blur 는 글자
+     *  가장자리 전체를 흐려서 그림자만 못 흐린다. */
+    subtitleShadowX?: number;
+    subtitleShadowY?: number;
+    // ── 시간박스 스타일 (2026-09-15 · 목업 "시간박스" 절) ──────────────────────────
+    /** 시간박스 글꼴(카탈로그 id). 미지정 = Pretendard ExtraBold(종전). */
+    timeboxFont?: string;
+    /** 시간박스 배경색(#RRGGBB · 기본 #3D7BD9 — es.channelBoxColor 로 전달). */
+    timeboxColor?: string;
+    /** 시간박스 크기(% · 기본 100 — 글자 22px 기준 배율). */
+    timeboxSize?: number;
     /**
      * 배포 언어 코드 (기본 `ko` · 2026-09-07 다국어 배포). 예: `vi`.
      *
