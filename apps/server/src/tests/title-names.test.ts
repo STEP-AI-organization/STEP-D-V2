@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { normalizeTitleCast, titleNamesPrompt, isActorTitle, NAMELESS_TITLE } from "../ai/title-names.ts";
+import {
+  normalizeTitleCast, titleNamesPrompt, isActorTitle, isVisibleActorTitle, NAMELESS_TITLE,
+} from "../ai/title-names.ts";
 import { autoEditorState } from "../pipeline/factory.ts";
 
 const root = path.resolve(import.meta.dirname, "../../../..");
@@ -14,6 +16,13 @@ describe("배우명 제목 대응표", () => {
       { actorName: " 김도현 ", characterNames: [" 민준 ", "민준"] },
       { actorName: "김도현", characterNames: ["강민준"] },
     ]), [{ actorName: "김도현", characterNames: ["민준", "강민준"] }]);
+  });
+  it("등록만 됐고 해당 구간에서 검출되지 않은 배우명은 제목에서 거절한다", () => {
+    const visible = [{ name: "하린", actorName: "이서연" }];
+    assert.equal(isVisibleActorTitle("이서연의 눈물", fixture.program, visible), true);
+    assert.equal(isVisibleActorTitle("김도현의 선택", fixture.program, visible), false);
+    assert.equal(isVisibleActorTitle("이 장면의 선택", fixture.program, visible), true);
+    assert.equal(isVisibleActorTitle("김도현의 선택", fixture.program, undefined), true);
   });
   it("미완성 대응표와 한 역할에 여러 배우를 연결한 입력은 거절한다", () => {
     for (const raw of [null, {}, [{ actorName: "김도현", characterNames: [] }],
@@ -49,6 +58,12 @@ describe("자동 렌더의 실제 오버레이", () => {
     assert.deepEqual(lines({ title: "김도현의 연기", titleLine1: "강민준의 선택", titleLine2: "그 결과는" }), ["김도현의 연기"]);
     assert.deepEqual(lines({ title: "강민준의 선택", hookQuote: "하린아 기다려" }), [NAMELESS_TITLE]);
   });
+  it("자동 렌더도 YOLO가 확인하지 않은 배우 이름을 안전 제목으로 대체한다", () => {
+    assert.deepEqual(lines({
+      title: "김도현의 연기",
+      visibleCast: [{ name: "하린", actorName: "이서연" }],
+    }), [NAMELESS_TITLE]);
+  });
 });
 
 describe("배우 표기 배선", () => {
@@ -57,7 +72,7 @@ describe("배우 표기 배선", () => {
     const index = read("apps/server/src/index.ts");
     assert.match(index, /next\.titleCast = normalizeTitleCast\(body\.titleCast\)/);
     assert.match(index, /titleNamesPrompt\(programForPrompt\)/);
-    assert.match(index, /!isActorTitle\(v, programForPrompt\)/);
+    assert.match(index, /!isVisibleActorTitle\(v, programForPrompt, visibleCastForTitle\)/);
     // 로스터(program_cast)를 고치면 **AI 가 읽는 대응표(titleCast)도 따라가야 한다.**
     // 이 고리가 없으면 출연자를 등록해도 제목에 실명이 안 나오고, 지워도 계속 나온다 —
     // 화면은 됐다고 하는데 결과물만 그대로인 모양이라 아무도 원인을 못 찾는다.

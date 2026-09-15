@@ -13,6 +13,7 @@ analyze() 본체가 900줄 근처로 커진 걸 관리 가능한 조각으로 �
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -915,6 +916,78 @@ def run_beat_signals(
             b["signals"] = s
     save_json(out_dir / "beats.json", beats_data)
     timed("beat_signals", ts)
+    return beats_data
+
+
+def run_yolo_cast(
+    *,
+    video_path: str,
+    beats_data: dict,
+    out_dir: Path,
+    cast_registry: list[dict] | None,
+    program_context: dict | None,
+    step: Callable[[str], None],
+    timed: Callable[[str, float], None],
+) -> dict:
+    """YOLO person detection + registered-face matching -> beat cast facts.
+
+    This replaces Gemini's cast-board comparison as the primary identity source.  It is
+    enabled by default only when ``cast_photos/`` exists; ``RUN_YOLO_CAST=0`` disables it.
+    Missing optional ML dependencies never fail an otherwise valid content analysis; when
+    registered photos are present, the safe result is unknown/anonymous rather than a
+    Gemini guess.
+    """
+    from core.vision.yolo_cast import VERSION, apply_beat_cast, detect_beat_cast
+
+    ts = time.time()
+    beats = (beats_data or {}).get("beats") or []
+    photos_dir = out_dir / "cast_photos"
+    if not beats:
+        return beats_data
+    if os.environ.get("RUN_YOLO_CAST", "1") == "0" or not photos_dir.exists():
+        # RUN_YOLO_CAST off / roster photos removed must also remove identities left in
+        # the reusable beats checkpoint. Otherwise disabled inference looks successful.
+        had_stale = any(b.get("characters_visible_source") == "yolo_cast" for b in beats)
+        apply_beat_cast(beats, {"beats": {}}, program_context)
+        if had_stale:
+            save_json(out_dir / "beats.json", beats_data)
+        return beats_data
+
+    cached = load_json(out_dir / "cast_detections.json")
+    if isinstance(cached, dict) and cached.get("version") == VERSION and cached.get("status") == "done":
+        applied = apply_beat_cast(beats, cached, program_context)
+        step(f"YOLO cast — 체크포인트 재사용 · 인물 확인 beat {applied}/{len(beats)}")
+        save_json(out_dir / "beats.json", beats_data)
+        timed("yolo_cast", ts)
+        return beats_data
+
+    try:
+        progress("yolo_cast", 86, "YOLO 출연자 검출")
+        # Remove identities from an older cast/photo checkpoint before recomputing. If the
+        # optional backend fails, stale names must not survive as if they were current facts.
+        apply_beat_cast(beats, {"beats": {}}, program_context)
+        save_json(out_dir / "beats.json", beats_data)
+        result = detect_beat_cast(
+            video_path, beats, out_dir,
+            cast_registry=cast_registry,
+            program_context=program_context,
+            on_progress=lambda done, total: progress(
+                "yolo_cast", 86 + 1 * done / max(1, total),
+                f"YOLO 출연자 프레임 {done}/{total}"),
+        )
+        save_json(out_dir / "cast_detections.json", result)
+        applied = apply_beat_cast(beats, result, program_context)
+        save_json(out_dir / "beats.json", beats_data)
+        step(
+            f"YOLO cast — {result.get('frames', 0)}프레임 · "
+            f"등록 얼굴 {len(result.get('references') or [])}명 · 인물 확인 beat {applied}/{len(beats)}"
+        )
+    except (ImportError, ModuleNotFoundError) as e:
+        step(f"  (YOLO cast 스킵 · 선택 의존성 없음: {str(e)[:120]})")
+    except Exception as e:
+        # Identity is an enhancement, not permission to discard paid STT/analysis work.
+        step(f"  (YOLO cast 실패 · 익명 인물 경로 유지: {str(e)[:160]})")
+    timed("yolo_cast", ts)
     return beats_data
 
 

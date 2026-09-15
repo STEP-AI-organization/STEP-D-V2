@@ -349,7 +349,8 @@ def build_segments(workdir: str | Path, media_id: str = "",
         # 인물 = beat 판정 + cast 등장구간 + 화면자막 이름 + 화자 라벨. 단 **전부 실명 필터를
         # 통과한 것만** — 익명 라벨이 섞이면 인물 필터도 쿼리파서 roster 도 무의미해진다.
         # 익명 라벨은 바로 아래 speakers 컬럼에 그대로 남는다.
-        characters = _real_names(_dedup(beat.get("characters"),
+        characters = _real_names(_dedup(beat.get("characters_visible"),
+                                        beat.get("characters"),
                                         _cast_in_window(cast, start, end),
                                         chyron_names,
                                         speakers))

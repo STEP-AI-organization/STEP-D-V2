@@ -25,6 +25,8 @@
 
 pytest==9.1.1
 google-genai==2.23.0
+# YOLO cast matcher tests exercise cosine threshold/margin without loading torch or OpenCV.
+numpy==2.4.6
 
 # pytest 의 전이 의존성 — 여기까지 고정해야 "같은 커밋 = 같은 실행" 이 성립한다.
 iniconfig==2.3.0

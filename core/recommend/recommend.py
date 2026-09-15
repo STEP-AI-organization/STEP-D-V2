@@ -3617,7 +3617,13 @@ def propose_shorts_beat_only(
         st = float(b.get("start", 0)); en = float(b.get("end", 0))
         dur = en - st
         hook = (b.get("hook") or "-").strip()
-        chars = ",".join(str(c).strip() for c in (b.get("characters") or []))[:40]
+        # 화면 등장(YOLO+등록얼굴)과 발화자(STT)는 다른 사실이다. 추천 모델에는 둘 다
+        # 보여주되, 화면 인물을 먼저 둬 제목에 쓸 수 있는 확정 이름이 잘리지 않게 한다.
+        beat_chars = list(dict.fromkeys([
+            *[str(c).strip() for c in (b.get("characters_visible") or []) if str(c).strip()],
+            *[str(c).strip() for c in (b.get("characters") or []) if str(c).strip()],
+        ]))
+        chars = ",".join(beat_chars)[:80]
         title = (b.get("title") or "").strip()[:60]
         summary = (b.get("summary") or "").strip()[:200]
         dialogue = _beat_dialogue(b)
@@ -4000,13 +4006,29 @@ title_alts 에 담는다 (기본 1 + 대안 2 = 최소 3개).
         # 이라는 전제가 거기서 깨져 있었다. LLM 값은 beat 에 라벨이 없을 때만 쓴다(표시용).
         hook = (picked_beats[0].get("hook") or s.get("hook") or "기타").strip()
         tags = [str(t).strip() for t in (s.get("tags") or []) if str(t).strip()]
-        # characters: 조합된 beats의 union
+        # characters: 조합된 beats의 화면 등장 + 발화자 union. 구조화된 cast_visible은
+        # 별도로 보존해 제목 검증·UI가 문자열 파싱 없이 castId/배우명을 쓸 수 있게 한다.
         chars_set: list[str] = []
+        visible_cast: list[dict] = []
+        visible_cast_ids: set[str] = set()
         for pb in picked_beats:
-            for c in (pb.get("characters") or []):
+            for c in [*(pb.get("characters_visible") or []), *(pb.get("characters") or [])]:
                 c = str(c).strip()
                 if c and c not in chars_set:
                     chars_set.append(c)
+            for row in (pb.get("cast_visible") or []):
+                if not isinstance(row, dict):
+                    continue
+                key = str(row.get("castId") or row.get("name") or "").strip()
+                if not key or key in visible_cast_ids:
+                    continue
+                visible_cast_ids.add(key)
+                visible_cast.append({
+                    k: row[k] for k in (
+                        "castId", "name", "actorName", "characterNames",
+                        "confidence", "coverage", "source",
+                    ) if k in row
+                })
         # summary: 각 beat summary를 이어붙여 근거로 명시 (grounded)
         reason = " · ".join((pb.get("summary") or "").strip() for pb in picked_beats if pb.get("summary"))
 
@@ -4056,6 +4078,7 @@ title_alts 에 담는다 (기본 1 + 대안 2 = 최소 3개).
             "hook_intro_caption": (s.get("hook_intro_caption") or "").strip()[:40],
             "tags": tags,
             "characters": chars_set,
+            "visible_cast": visible_cast,
             "beat_ids": ids,
             "source": "beat_only",
         })

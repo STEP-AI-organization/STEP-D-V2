@@ -61,6 +61,11 @@ def build_speaker_mapping(
     all_visible: set[str] = set()
 
     for b in beats or []:
+        # YOLO는 "화면에 보이는 사람"만 증명한다. 그 사람이 말하고 있다는 증거는 아니므로
+        # 익명 STT 화자를 얼굴 이름으로 rewrite하는 투표에는 쓰지 않는다. 제목/검색의 등장
+        # 인물 근거로는 그대로 사용한다.
+        if b.get("characters_visible_source") == "yolo_cast":
+            continue
         chars = b.get("characters") or []
         visible = b.get("characters_visible") or []
         # dominant STT speaker (가장 비중 큰 것 하나 = characters[0])
@@ -128,6 +133,9 @@ def assign_speakers_from_captions(
         if en <= st:
             continue
         visible = b.get("characters_visible") or []
+        # 화면 등장과 발화자를 동일시하지 않는다. YOLO 결과는 제목·등장 인물용이다.
+        if b.get("characters_visible_source") == "yolo_cast":
+            continue
         # cast_registry 매칭 이름들 (익명 라벨 제외)
         matched = [v.strip() for v in visible
                      if isinstance(v, str) and _in_registry(v.strip(), cast_registry)]

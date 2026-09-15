@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision the STEP-D GEBD (장면 경계) worker on an on-demand GPU VM.
+# Provision the STEP-D GEBD + registered-cast YOLO workers on an on-demand GPU VM.
 #
 # 이 VM 은 mmaction2 (GEBD) inference 만 담당한다. content.analyze 파이프라인이
 # gebd.detect 잡을 enqueue 하면 여기서 픽업 → Docker 컨테이너로 boundaries.json 만들어
@@ -25,7 +25,7 @@ REPO_URL="${REPO_URL:-https://github.com/STEP-AI-organization/STEP-D-V2.git}"
 APP_DIR="${APP_DIR:-/opt/stepd}"
 # GEBD Docker 이미지 (GAR · gebd Dockerfile 별도 준비 · deploy/gebd-docker/)
 GEBD_IMAGE="${GEBD_IMAGE:-asia-northeast3-docker.pkg.dev/step-d/stepd/gebd-mmaction2:latest}"
-# idle 자동 종료 임계 (초). pending gebd.detect == 0 이 이 시간 지속되면 shutdown.
+# idle 자동 종료 임계 (초). pending GEBD/YOLO GPU job == 0 이 이 시간 지속되면 shutdown.
 IDLE_SHUTDOWN_SEC="${IDLE_SHUTDOWN_SEC:-600}"
 
 echo "==> Base packages"
@@ -103,7 +103,7 @@ sudo docker pull "$GEBD_IMAGE" || {
   exit 1
 }
 
-echo "==> GEBD worker service (single lane: gebd)"
+echo "==> GEBD worker service (lane: gebd; cast lane is installed separately)"
 # worker.ts 안 gebd.detect 핸들러가 Docker run 을 호출한다 (파일 참조: apps/server/src/worker.ts).
 # WORKER_JOBS=gebd 로 이 프로세스는 gebd.* 잡만 픽업 · content/youtube lane 과 격리.
 sudo tee /etc/systemd/system/stepd-worker-gebd.service >/dev/null <<EOF
@@ -130,7 +130,7 @@ WantedBy=multi-user.target
 EOF
 
 echo "==> Auto-shutdown daemon (idle ${IDLE_SHUTDOWN_SEC}s)"
-# pending gebd.detect 잡 == 0 이 IDLE_SHUTDOWN_SEC 지속되면 VM shutdown.
+# pending gebd.detect/cast.detect == 0 이 IDLE_SHUTDOWN_SEC 지속되면 VM shutdown.
 # Cloud Scheduler 가 다시 필요할 때 wake 라우트로 부팅함.
 # psql 로 큐 조회 · 무의미 · gebd.detect=0 조건.
 sudo tee /usr/local/bin/gebd-idle-shutdown.sh >/dev/null <<'EOF'
@@ -140,9 +140,9 @@ IDLE=${IDLE_SHUTDOWN_SEC:-600}
 COUNT_FILE=/var/tmp/gebd-idle-count
 touch "$COUNT_FILE"
 while true; do
-  # pending gebd.detect 잡 수 조회 (queue.ts::queueStats 등가 SQL)
+  # pending GPU jobs (GEBD + registered-cast YOLO) 조회
   PENDING=$(psql -h 127.0.0.1 -U stepd -d stepd -tAc \
-    "SELECT COUNT(*) FROM job_queue WHERE type = 'gebd.detect' AND status IN ('pending','running')" 2>/dev/null || echo -1)
+    "SELECT COUNT(*) FROM job_queue WHERE type IN ('gebd.detect','cast.detect') AND status IN ('pending','running')" 2>/dev/null || echo -1)
   if [ "$PENDING" = "0" ]; then
     NOW=$(date +%s)
     IDLE_SINCE=$(cat "$COUNT_FILE" 2>/dev/null || echo "$NOW")

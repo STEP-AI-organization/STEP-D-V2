@@ -1,0 +1,10 @@
+# YOLO cast stage — install in the CUDA-capable analysis environment in addition to
+# requirements.lock.txt. Kept separate because the normal content worker is intentionally
+# CPU-only and these packages pull PyTorch/CUDA-sized dependencies.
+#
+# The Python packages are not the whole license story: Ultralytics is AGPL-3.0 unless an
+# enterprise license applies, and InsightFace's bundled pretrained weights are documented
+# as non-commercial research only. Production must provide approved weights/licenses.
+ultralytics==8.4.147
+insightface==0.7.3
+onnxruntime-gpu==1.30.0

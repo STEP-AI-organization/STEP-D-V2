@@ -427,6 +427,21 @@ def build_prompt_tail(beat: dict) -> str:
     )
     if chars:
         body += f"- 감지된 화자: {' · '.join(chars[:4])}\n"
+    verified_cast = beat.get("cast_visible") or []
+    if isinstance(verified_cast, list) and verified_cast:
+        labels = []
+        for row in verified_cast[:6]:
+            if not isinstance(row, dict):
+                continue
+            canonical = str(row.get("name") or "").strip()
+            actor = str(row.get("actorName") or canonical).strip()
+            if canonical:
+                labels.append(f"{canonical}(제목 표기: {actor})" if actor != canonical else canonical)
+        if labels:
+            body += (
+                f"- YOLO+등록얼굴로 확인된 화면 인물: {' · '.join(labels)}\n"
+                "  (확정 입력이다. 다른 이름으로 바꾸거나 새 인물을 추측하지 말 것)\n"
+            )
     if stt:
         body += f"\n[Beat 안 발화]\n{stt[:1200]}\n"
     return body
@@ -617,7 +632,34 @@ def annotate_beats(
     # 회차 한 번만 만들어 모든 beat 콜에 공유(첫 이미지). 사진 없으면 None → 기존 동작.
     cast_board = None
     cast_board_names = None
-    if (os.environ.get("BEAT_ANNOT_CAST_BOARD") or "1") != "0":
+    # YOLO가 등록 얼굴과 이미 대조한 경우 같은 사진판을 Gemini에 또 보내지 않는다. 이름
+    # 판정 비용을 두 번 내지 않고, 서로 다른 판정이 characters_visible을 덮는 것도 막는다.
+    has_yolo_cast = any(
+        isinstance(b, dict) and b.get("characters_visible_source") == "yolo_cast"
+        for b in beats
+    )
+    if not has_yolo_cast:
+        try:
+            checkpoint = json.loads((out / "cast_detections.json").read_text(encoding="utf-8"))
+            # A completed YOLO pass with zero accepted names is still evidence: every
+            # identity stayed inside the unknown/reject region. Do not pay Gemini to
+            # second-guess it from the same registration photos.
+            has_yolo_cast = checkpoint.get("status") == "done"
+        except (OSError, ValueError, TypeError):
+            pass
+    # 등록 사진이 있고 YOLO 경로를 켰다면, 백엔드 실패 때도 Gemini 명찰판으로 몰래
+    # 되돌아가지 않는다. 잘못된 이름보다 unknown이 낫고, 비용 절감 효과도 예측 가능해야 한다.
+    use_yolo_identity = has_yolo_cast or (
+        (os.environ.get("RUN_YOLO_CAST") or "1") != "0"
+        and (out / "cast_photos").is_dir()
+    )
+    if use_yolo_identity and not has_yolo_cast:
+        pc_str += (
+            "\n[출연자 식별 정책]\n"
+            "등록 사진 기반 YOLO 식별이 활성화됐지만 이 beat에 확정된 일치 인물이 없다. "
+            "characters에 배우/극중 이름을 추측해서 쓰지 말고 익명 또는 빈 목록을 사용하라.\n"
+        )
+    if not use_yolo_identity and (os.environ.get("BEAT_ANNOT_CAST_BOARD") or "1") != "0":
         # 이름 원천: cast_registry(대표 이름) 우선 · 없으면 program_context.cast 폴백.
         cast_names = _registry_names(cast_registry)
         if not cast_names and isinstance(program_context, dict):
@@ -667,8 +709,10 @@ def annotate_beats(
                 if ann.get("summary"): b["summary"] = str(ann["summary"])[:400]
                 if ann.get("scene_summary"): b["scene_summary"] = str(ann["scene_summary"])[:200]
                 if ann.get("hook"): b["hook"] = str(ann["hook"])
-                if isinstance(ann.get("characters"), list):
-                    # 기존 characters (dominant speaker) 는 유지 · 시각 감지 인물은 별도 필드
+                if (not use_yolo_identity and b.get("characters_visible_source") != "yolo_cast"
+                        and isinstance(ann.get("characters"), list)):
+                    # YOLO 확정값이 없는 beat만 Vision 후보를 쓴다. 등록 얼굴 기반 값을 LLM
+                    # 추측으로 덮으면 이 단계 분리의 의미가 사라진다.
                     b["characters_visible"] = [str(x)[:40] for x in ann["characters"][:6]]
                 if isinstance(ann.get("on_screen_captions"), list):
                     b["on_screen_captions"] = [str(x)[:100] for x in ann["on_screen_captions"][:10] if str(x).strip()]

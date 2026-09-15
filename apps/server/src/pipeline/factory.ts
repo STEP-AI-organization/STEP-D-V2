@@ -31,7 +31,7 @@ import { billableMinutes } from "../billing/billing.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { dispatchPublish } from "../publish/publish-dispatch.ts";
 import { newId } from "../ids.ts";
-import { actorTitleOrFallback, isActorTitle, titleCastOf } from "../ai/title-names.ts";
+import { actorTitleOrFallback, isVisibleActorTitle, titleCastOf } from "../ai/title-names.ts";
 import { enqueue } from "./queue.ts";
 import { basicReframeState } from "../media/reframe.ts";
 import { FONT_FAMILIES } from "../media/overlay-canvas.ts";
@@ -743,8 +743,8 @@ export function autoEditorState(
   // 줄을 접어 놓고 정작 화면에는 짧은 줄이 뜬다.
   const hook = cleanOverlayText(String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, ""));
   const actorNames = titleCastOf(program).length > 0;
-  const validPair = isActorTitle(String(rec.titleLine1 ?? ""), program)
-    && isActorTitle(String(rec.titleLine2 ?? ""), program);
+  const validPair = isVisibleActorTitle(String(rec.titleLine1 ?? ""), program, rec.visibleCast)
+    && isVisibleActorTitle(String(rec.titleLine2 ?? ""), program, rec.visibleCast);
   const line1 = validPair ? cleanOverlayText(rec.titleLine1) : "";
   const line2 = validPair ? cleanOverlayText(rec.titleLine2) : "";
   // 훅 치환 의도 보존: 짧고 강한 훅이 있으면 headline 을 훅으로 대체한다(기존 동작 그대로).
@@ -763,7 +763,8 @@ export function autoEditorState(
   } else if (line1 && line2) {
     lines = [line1, line2];
   } else {
-    ({ lines } = wrapAutoTitle(line1 || cleanOverlayText(actorTitleOrFallback(String(rec.title ?? ""), program)), lang));
+    ({ lines } = wrapAutoTitle(line1 || cleanOverlayText(
+      actorTitleOrFallback(String(rec.title ?? ""), program, rec.visibleCast)), lang));
   }
   // 채널 아이콘 기본값 = 프로그램 이미지(F). 브랜딩 아이콘(쇼츠 전용) 우선, 없으면 대표
   // 이미지(포스터), 둘 다 없으면 미설정(에디터는 'CH' 플레이스홀더 · 렌더는 아이콘 생략).
@@ -930,6 +931,7 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     endTime: rec.endTime,
     sourceMediaId: master?.id,
     sourceRecommendationId: rec.id,
+    visibleCast: Array.isArray(rec.visibleCast) ? rec.visibleCast : undefined,
     beatIds: Array.isArray(rec.beatIds) ? rec.beatIds : [],
     reframe: basicReframeState(),
     distributions: [],

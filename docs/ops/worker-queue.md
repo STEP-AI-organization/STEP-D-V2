@@ -51,7 +51,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | **크래시 복구** | 워커가 죽어 `running`으로 잠긴 잡은 30분 뒤 `requeueStale()`이 회수한다 (기동 시 + 15분 tick마다). |
 | **후속 잡** | 핸들러가 `FollowUp`을 반환하면 현재 잡이 `done`이 된 **뒤에** enqueue한다. 자기 재큐 잡(hotwatch)이 아직 `running`인 자기 자신과 dedupe 충돌하지 않게 하기 위한 장치다. |
 
-## 잡 타입 28종
+## 잡 타입 29종
 
 `queue.ts`의 `JobType` 정의와 `worker.ts`의 `handle()` switch가 처리한다.
 새 잡 타입(렌더링 등)이 들어올 자리도 이 switch다.
@@ -85,12 +85,13 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 |---|---|---|---|
 | `stepd-worker-youtube` | `youtube` | channel.analyze · video.analyze · video.hotwatch · video.comments · distribution.publish · automation.cycle · youtube.reconcile | O (15분) |
 | `stepd-worker-content` | `content` | media.prepare · content.analyze · clip.reframe · youtube.download · match.* · thumbnail.* · clip.metadata | X (youtube 일이라 안 함) |
+| `stepd-worker-cast` | `cast` | cast.detect (YOLO26n + ArcFace) | X (GPU VM, 별도 venv) |
 
 - 구현: `queue.ts`의 `claimJob(types?)` 타입 필터 + `worker.ts`의 `WORKER_JOBS` env 분기.
   `SKIP LOCKED`라 두 워커가 같은 테이블을 안전하게 나눠 먹는다 — 사실상 별도 큐, 경합 0.
 - **`WORKER_JOBS` 미설정(`all`)이면 한 워커가 전부 처리**(구버전 호환) — 프로비저닝 안 된 VM은 그대로 돈다.
-- 둘 다 GPU-free(STT까지 Gemini 오디오)라 지금은 한 e2-small에 두 프로세스로 충분. content가 커지면
-  content 레인만 별도/GPU VM으로 떼면 된다(그 VM만 `WORKER_JOBS=content`로 띄우면 끝).
+- youtube/content는 GPU-free(STT까지 Gemini 오디오)라 Cloud Run Jobs로 둔다. 등록 출연자 식별은
+  `cast` 레인만 L4 VM으로 떼며, `deploy/gebd/setup-cast-lane.sh`가 별도 venv/systemd를 설치한다.
 
 **content 레인 필수 env** (`/etc/stepd/worker.env`, `worker-vm.sh`가 넣는다):
 `GCS_BUCKET`(GCS 영상 읽기 — 없으면 로컬모드로 못 찾아 ENOENT) · `GCS_UPLOAD_BUCKET`(선택: 서울 업로드 스테이징, 미설정 시 GCS_BUCKET) · `CORE_PYTHON`(=`/opt/stepd/core/.venv/bin/python`,

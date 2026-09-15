@@ -3,7 +3,13 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from core.recommend.title_names import guard_title_result, is_actor_title, title_names_prompt, NAMELESS_TITLE
+from core.recommend.title_names import (
+    NAMELESS_TITLE,
+    guard_title_result,
+    is_actor_title,
+    is_visible_actor_title,
+    title_names_prompt,
+)
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/title-names.json").read_text(encoding="utf-8"))
 CTX = FIXTURE["program"]
@@ -27,6 +33,18 @@ def test_guard_keeps_original_dialogue_and_analysis():
     for key in ("hook_quote", "characters", "reason"):
         assert result[key] == short[key]
     assert guard_title_result({"shorts": [short]}, {}) == {"shorts": [short]}
+
+
+def test_guard_rejects_registered_actor_who_is_not_visible_in_selected_beats():
+    visible = [{"name": "하린", "actorName": "이서연"}]
+    assert is_visible_actor_title("이서연의 눈물", CTX, visible)
+    assert not is_visible_actor_title("김도현의 선택", CTX, visible)
+    result = guard_title_result({"shorts": [{
+        "title": "김도현의 선택", "title_line1": "김도현의 눈빛", "title_line2": "그 순간",
+        "visible_cast": visible,
+    }]}, CTX)["shorts"][0]
+    assert result["title"] == NAMELESS_TITLE
+    assert result["title_line1"] == result["title_line2"] == ""
 
 
 def test_both_recommendation_entries_guard_fallback_results():

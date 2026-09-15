@@ -1,8 +1,8 @@
 /**
  * Content-analysis job runner (worker side).
  *
- * Pulls the uploaded video, runs the GPU-free Python pipeline (core/analyze.py:
- * STT → refine → scenes → frame analysis(vision+names) → two-phase shorts), and
+ * Pulls the uploaded video, runs the Python pipeline (core/analyze.py:
+ * STT → refine → scenes → beats → optional YOLO cast → frame analysis → two-phase shorts), and
  * stores the result JSON in content_analysis. Kept in its own module so worker.ts
  * only needs a one-line case.
  *
@@ -49,7 +49,8 @@ import { autoTopupNeedsAttention, checkCredits, usageDedupeKey as creditUsageKey
 import { maybeAutoTopup, topupAndRecheck } from "../billing/auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "../ai/cast.ts";
 import { titleCastOf } from "../ai/title-names.ts";
-import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "../media/storage-gcs.ts";
+import { createReadStream, listPrefix, parseObjectPath, readFile, uploadFile, useGcs } from "../media/storage-gcs.ts";
+import { castPrefix } from "../media/thumbnail-assets.ts";
 import { enqueue } from "./queue.ts";
 import { newId } from "../ids.ts";
 import {
@@ -110,6 +111,7 @@ const I18N_CHECKPOINTS = Object.keys(CAPTION_LANGS)
 
 const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json", "signals.json", "genre.json", "chyron.json",
   ...I18N_CHECKPOINTS,
+  "cast_registry.json", "program_context.json", "cast_detections.json",
   // 스테이지가 아니라 **원가 증빙**이다. 여기 넣어야 ① 작업 디렉토리가 날아가도 누적 원가가
   // 살아남고(재개 회차가 과소계상되지 않는다) ② 나중에 "그 편이 왜 비쌌나" 를 되짚을 수 있다.
   "usage.json"];
@@ -610,6 +612,7 @@ function runAnalyze(
   mediaId?: string,
   titleRefsPath?: string,
   translateLangs?: string[],
+  resumedFromCast = false,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = ["-u", "-m", "core.analyze", videoPath, "--out", outDir];
@@ -651,6 +654,11 @@ function runAnalyze(
           //    정제를 한 번 더 돌렸다. 확정 스택인 "soniox" 로 맞춘다.
           //    (프로덕션 워커는 STT_PROVIDER=soniox 를 명시하므로 지문 변화 없음)
           STT_PROVIDER: process.env.STT_PROVIDER || "soniox",
+          // GPU mode is a separate queue lane; the CPU content worker must not run the
+          // optional YOLO/ArcFace stage and leave an anonymous result behind first.
+          RUN_YOLO_CAST: process.env.YOLO_CAST_MODE === "gpu" && !resumedFromCast
+            ? "0"
+            : (process.env.RUN_YOLO_CAST || "1"),
           GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT || "step-d",
           VERTEX_LOCATION: process.env.VERTEX_LOCATION || "asia-northeast3",
         },
@@ -792,6 +800,11 @@ function runAnalyze(
 type Short = {
   rank?: number; appeal?: number; start?: number; end?: number;
   title?: string; reason?: string; tags?: string[];
+  /** YOLO person detection + registered-face match for the selected beats. */
+  visible_cast?: Array<{
+    castId?: string; name?: string; actorName?: string; characterNames?: string[];
+    confidence?: number; coverage?: number; source?: string;
+  }>;
   /** Core Beat lineage used by the downstream AI reframe planner. */
   beat_ids?: Array<number | string>;
   /** 3축 직교 스코어(각 0-10, 2026-07-23~). ⚠️ 2026-08-06 이후 회차는 **비어 있다** —
@@ -867,6 +880,9 @@ function recFromShort(episodeId: string, s: Short) {
     monetizable: s.monetizable === true ? true : undefined,
     title: titleMain,
     titleCandidates,
+    // Structured evidence travels with the recommendation so title overlays can be
+    // audited without re-reading faces.json or parsing a display string.
+    visibleCast: Array.isArray(s.visible_cast) ? s.visible_cast : undefined,
     // 두 줄 제목 (2026-07-29 설계 · 2026-08-19 배선). recommend 가 **필수로** 뽑는데
     // (core/recommend/recommend.py: "title_line1 + title_line2 를 필수로 뽑는다") 여기서
     // 안 읽어서 추천 엔티티에 실리지 않았다 → 채택된 클립의 titleLine1/2 가 늘 undefined →
@@ -1375,6 +1391,21 @@ async function persistArtifacts(work: string, mediaId: string): Promise<{ base: 
         );
       }
     }
+    // Registered portraits are private pipeline inputs for the optional GPU cast lane.
+    // Keep them under the same private analysis prefix so a Cloud Run retry/VM handoff
+    // does not depend on the ephemeral work directory.
+    const castPhotosDir = path.join(work, "cast_photos");
+    if (fs.existsSync(castPhotosDir)) {
+      const castPhotos = fs.readdirSync(castPhotosDir).filter((f) => /\.(jpe?g|png|webp|bmp)$/i.test(f));
+      const CONCURRENCY = 8;
+      for (let i = 0; i < castPhotos.length; i += CONCURRENCY) {
+        await Promise.all(
+          castPhotos.slice(i, i + CONCURRENCY).map((f) =>
+            uploadFile(`${base}/cast_photos/${f}`, path.join(castPhotosDir, f)),
+          ),
+        );
+      }
+    }
     // face_clusters/ — 얼굴 클러스터별 대표 크롭. UI 인물 매핑 화면에서 <img src>로 뜸.
     const faceDir = path.join(work, "face_clusters");
     if (fs.existsSync(faceDir)) {
@@ -1542,9 +1573,11 @@ export async function runContentAnalyze(
   mediaId: string, fast = false,
   /** 이 잡의 시도 횟수 — 마지막 시도면 "재시도 대기" 라고 거짓 안내하지 않기 위해 쓴다. */
   attempt?: { n: number; max: number },
+  options?: { resumedFromCast?: boolean },
 ): Promise<void> {
   // 잡 페이로드 fast:true 또는 워커 전역 CORE_ANALYZE_FAST=1 이면 빠른 모드. 대량 배치용 전역 스위치.
   fast = fast || process.env.CORE_ANALYZE_FAST === "1";
+  const resumedFromCast = options?.resumedFromCast === true;
   const media = await getMedia(mediaId);
   if (!media) throw new Error(`content.analyze: media ${mediaId} not found`);
 
@@ -1765,14 +1798,18 @@ export async function runContentAnalyze(
           console.log(`[worker] content.analyze ${mediaId}: cast registry ${roster.length} members`);
         }
         // 프로그램 상세 페이지에서 등록한 캐스트 인물 사진(program.castPhotos: name → data URL)을
-        // work/cast_photos/{safe_name}.{ext}로 풀어 놓는다. faces.py가 이 폴더를 스캔해서
-        // 인물 embedding을 뽑고 클러스터에 이름을 자동 매칭한다. 사진 없는 캐스트는 스킵.
+        // work/cast_photos/{safe_name}.{ext}로 풀어 놓는다. core/vision/yolo_cast.py가
+        // 이 폴더를 스캔해 등록 얼굴 임베딩을 만들고 beat별 검출 인물과 대조한다.
+        // 사진 없는 캐스트는 스킵.
         const castPhotos = program?.castPhotos && typeof program.castPhotos === "object"
           ? (program.castPhotos as Record<string, string>)
           : undefined;
+        const photosDir = path.join(work, "cast_photos");
+        // Work dirs survive retries. Rebuild this input directory from the current roster
+        // so deleting/replacing a portrait cannot leave an old identity in the next run.
+        fs.rmSync(photosDir, { recursive: true, force: true });
+        fs.mkdirSync(photosDir, { recursive: true });
         if (castPhotos && Object.keys(castPhotos).length > 0) {
-          const photosDir = path.join(work, "cast_photos");
-          fs.mkdirSync(photosDir, { recursive: true });
           let written = 0;
           for (const [name, dataUrl] of Object.entries(castPhotos)) {
             if (typeof dataUrl !== "string") continue;
@@ -1794,6 +1831,33 @@ export async function runContentAnalyze(
           if (written > 0) {
             console.log(`[worker] content.analyze ${mediaId}: cast photos ${written} written to ${photosDir}`);
           }
+        }
+        // The multipart cast-photo API stores the canonical references in object storage
+        // (thumbnail-assets/cast/<program>/<name>/<timestamp>.*), while older settings
+        // stored one data URL in program.castPhotos. Bring both forms into the same local
+        // folder so YOLO can use all registered references and cache invalidation sees them.
+        try {
+          const prefix = castPrefix(episode.programId);
+          const objects = await listPrefix(prefix);
+          let pulled = 0;
+          for (const objectPath of objects) {
+            const rel = objectPath.slice(prefix.length).replace(/^\//, "");
+            const [name, fileName] = rel.split("/");
+            const leaf = fileName ? path.basename(fileName) : "";
+            const ext = (leaf.match(/\.(jpe?g|png|webp)$/i)?.[1] || "").toLowerCase();
+            if (!name || !leaf || !ext) continue;
+            const safe = name.replace(/[/\\\0]/g, "_").trim().slice(0, 60);
+            const bytes = await readFile(objectPath);
+            if (!safe || !bytes.length || bytes.length > 4 * 1024 * 1024) continue;
+            fs.writeFileSync(path.join(photosDir, `${safe}__${leaf}`), bytes);
+            pulled++;
+          }
+          if (pulled > 0) console.log(`[worker] content.analyze ${mediaId}: cast photo assets ${pulled} pulled`);
+        } catch (e) {
+          console.warn(`[worker] content.analyze ${mediaId}: cast photo assets pull skipped:`, e);
+        }
+        if (!fs.readdirSync(photosDir).some((entry) => /\.(jpe?g|png|webp|bmp)$/i.test(entry))) {
+          fs.rmSync(photosDir, { recursive: true, force: true });
         }
       }
       // 프로그램 정보(시놉시스·태그·크레딧 등) — 사용자가 상세 페이지에서 입력. 하나라도
@@ -1893,8 +1957,13 @@ export async function runContentAnalyze(
     }
 
     const runStartedAt = Date.now();
+    if (process.env.YOLO_CAST_MODE === "gpu" && !resumedFromCast) {
+      // A GPU handoff is authoritative for this run. Do not upload/consume a stale
+      // detection checkpoint left by a previous roster or threshold configuration.
+      fs.rmSync(path.join(work, "cast_detections.json"), { force: true });
+    }
     try {
-      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre, mediaId, titleRefsPath, translateLangs);
+      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre, mediaId, titleRefsPath, translateLangs, resumedFromCast);
     } catch (e) {
       const analysisPath = path.join(work, "analysis.json");
       if (!fs.existsSync(analysisPath)) throw e;
@@ -1913,6 +1982,22 @@ export async function runContentAnalyze(
     // Persist frames + stage outputs before anything can throw them away — they power
     // the Lab/editor views and let a future re-analysis start from stored stages.
     const stored = await persistArtifacts(work, mediaId);
+    // In GPU mode the CPU content job deliberately skipped YOLO (see runAnalyze env).
+    // Queue the small, resumable cast stage only after beats, registry, context, and
+    // portraits have been persisted for the GPU VM handoff.
+    if (process.env.YOLO_CAST_MODE === "gpu" && !resumedFromCast && process.env.GCS_BUCKET
+        && fs.existsSync(path.join(work, "cast_photos"))) {
+      try {
+        const castJob = await enqueue(
+          "cast.detect",
+          { mediaId, videoGcsPath: media.path, workdirGcsPrefix: `analysis/${mediaId}` },
+          { dedupeKey: `cast.detect:${mediaId}` },
+        );
+        if (castJob) console.log(`[worker] content.analyze ${mediaId}: cast.detect 큐잉 (${castJob})`);
+      } catch (e) {
+        console.warn(`[worker] content.analyze ${mediaId}: cast.detect 큐잉 실패 (익명 결과 유지)`, e);
+      }
+    }
     const i18n = collectI18nTranscripts(work);
     await saveContentAnalysis(mediaId, {
       data: {

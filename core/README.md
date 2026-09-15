@@ -23,6 +23,7 @@ analyze.py                     오케스트레이터 (단계별 체크포인트 
   ├─ stt/        음성 → 자막      Soniox STT + 화자분리 + 후처리(이름 확정)
   ├─ scenes/     영상 → 장면      shot 경계 · scene_type · GEBD 경계 · 화면자막(chyron)
   ├─ beats/      장면 → beat      최소 6초 단위로 쪼개고 Vision 으로 주석
+  ├─ vision/     beat → 출연자    YOLO26n 사람 검출 + 등록 얼굴 임베딩 매칭
   ├─ recommend/  beat → 쇼츠 추천  (beat-only · 시청자 신호 반영)
   ├─ reframe/    쇼츠 → AI 구도  beat별 Fill/Fit 판정 · 인물 추적 (CPU)
   └─ search/     세그먼트 색인     pgvector 임베딩 + 키워드축
@@ -51,6 +52,7 @@ analyze.py                     오케스트레이터 (단계별 체크포인트 
 | 스위치 | 기본 | 왜 |
 |---|---|---|
 | `RUN_FACES` | off | 되살릴 때만 켠다 |
+| `RUN_YOLO_CAST` | cast 사진이 있으면 on | `0`이면 등록 얼굴 기반 beat 출연자 식별을 끈다 |
 | `RUN_PPL` | **off** | 과다검출 + 실행시간 절반을 먹었다 (2026-08-06 결정) |
 | `RUN_REFINE` · `RUN_CHYRON_PER_SEG` | 상황별 | CLAUDE.md 참고 |
 
@@ -66,6 +68,11 @@ analyze.py                     오케스트레이터 (단계별 체크포인트 
 ```powershell
 core\.venv310\Scripts\python.exe -m core.analyze <mediaId> ...
 ```
+
+등록 사진 기반 출연자 식별을 쓰는 GPU 환경은 기본 의존성에 더해
+`pip install -r core/requirements-yolo.txt`가 필요하다. YOLO는 사람 위치를 찾고,
+이름은 등록 사진의 얼굴 임베딩과 일치할 때만 붙인다. 결과는 `cast_detections.json`과
+`beats.json.cast_visible`에 남으며, 일치하지 않으면 이름을 추측하지 않는다.
 
 자세히는 [docs/reference/core-pipeline-reference.md](../docs/reference/core-pipeline-reference.md)
 · [docs/ops/local-dev.md](../docs/ops/local-dev.md).

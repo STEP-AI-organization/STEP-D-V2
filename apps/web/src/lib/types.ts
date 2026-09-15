@@ -155,6 +155,16 @@ export interface Recommendation {
   /** 처음 제목 생성 단계에서 뽑힌 대체 제목 후보들 (기본 title 포함/미포함 무관).
    *  에디터의 '제목 후보' 탭이 이 배열을 후보 리스트로 표시한다. 비어 있으면 title 하나만. */
   titleCandidates?: string[];
+  /** YOLO 사람 검출 뒤 등록 얼굴과 일치한 출연자. 제목 배우명 검증의 근거다. */
+  visibleCast?: Array<{
+    castId?: string;
+    name?: string;
+    actorName?: string;
+    characterNames?: string[];
+    confidence?: number;
+    coverage?: number;
+    source?: string;
+  }>;
   /** 1–5 legacy compressed appeal (higher = surfaced first). 2026-07-23~는 score100/3축이 진짜 스코어. */
   appeal: number;
   /** 0-100 메인 스코어. 2026-08-06~ **결정론 계산**(signal 0.40·hook 0.25·length 0.20·closure 0.15).
@@ -302,6 +312,8 @@ export interface Clip {
   titleLine2?: string;
   /** 둘째 줄 강조색 이름 — 채택 시 추천에서 승계(blue|red|yellow|green). 없으면 파랑. */
   titleLine2Color?: string;
+  /** 채택 당시의 검증된 출연자 근거. 제목 재생성에서도 등록만 된 배우를 추측하지 않게 한다. */
+  visibleCast?: Recommendation["visibleCast"];
   /** 첫 3초 hook intro (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md) — adopt 시 rec 에서 승계.
    *  에디터 "첫 3초 훅" 토글(editorState.hookOn) ON + hookTimeSec 있을 때 /export 가 프리롤로 붙인다. */
   hookQuote?: string;

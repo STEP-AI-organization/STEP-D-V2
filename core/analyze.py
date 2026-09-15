@@ -1,9 +1,10 @@
 """
 STEP D Core — full content analysis orchestrator (production entrypoint)
 
-Runs the whole GPU-free pipeline on one video and emits a single result JSON:
+Runs the whole pipeline on one video and emits a single result JSON. The normal path is
+GPU-free; when registered cast photos exist, the optional YOLO/ArcFace stage runs lazily:
 
-    영상 → STT(관리형) → 자막정제 → 장면분할+프레임 → 프레임분석(시각채점+이름자막) → 쇼츠추천(2단계)
+    영상 → STT(관리형) → 자막정제 → 장면분할+프레임 → beat → YOLO 출연자(선택) → 주석 → 추천
 
 This is what the worker invokes for a `content.analyze` job. Everything is
 Gemini/Vertex + ffmpeg + scenedetect — no GPU. Auth via ADC.
@@ -49,7 +50,7 @@ from core.analyze_stages import (
     run_translate_out,
     run_detect_genre,
     join_ppl, run_scenes, run_cast_timeline, run_timeline, run_narrative,
-    run_shot_boundary, run_scene_type, run_beats, run_beat_signals, run_beat_annot,
+    run_shot_boundary, run_scene_type, run_beats, run_beat_signals, run_yolo_cast, run_beat_annot,
     run_speaker_identity, run_recommend,
 )
 
@@ -88,7 +89,7 @@ def analyze(
     _prepare_checkpoints(
         out_dir, video_path, resume,
         genre=genre, shorts_n=shorts_n, profile=profile,
-        channels=channels, cast_registry=cast_registry,
+        channels=channels, cast_registry=cast_registry, program_context=program_context,
     )
 
     # ── PPL 병렬 시작 (2026-07-23 A1 최적화) ────────────────────────────────
@@ -347,6 +348,14 @@ def analyze(
     beats_data = run_beat_signals(
         video_path=video_path, beats_data=beats_data, refined=refined,
         shots_data=shots_data, out_dir=out_dir, step=step, timed=timed,
+    )
+
+    # 4h-3) YOLO 인물 검출 + 등록 얼굴 임베딩 매칭. 인물 식별을 beat Vision의 추측에서
+    #       분리한다. 결과는 beat.cast_visible(구조화) + characters_visible(기존 호환)에 싣는다.
+    beats_data = run_yolo_cast(
+        video_path=video_path, beats_data=beats_data, out_dir=out_dir,
+        cast_registry=cast_registry, program_context=program_context,
+        step=step, timed=timed,
     )
 
     # 4i) beat annotate → analyze_stages.run_beat_annot

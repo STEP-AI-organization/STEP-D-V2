@@ -2,8 +2,8 @@
 
 > 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: **2026-08-24**.
 >
-> ⚠️ **2026-08-07 전면 개편.** 워커가 GCE VM → **Cloud Run Jobs** 로 옮겨졌고,
-> GEBD(화면전환 모델)용 **GPU VM** 이 새로 생겼다. 이전 판이 기술하던 `stepd-worker` VM 은
+> ⚠️ **2026-08-07 전면 개편.** 일반 워커가 GCE VM → **Cloud Run Jobs** 로 옮겨졌고,
+> GEBD·YOLO 출연자 식별용 **GPU VM** 은 별도 lane으로 유지한다. 이전 판이 기술하던 `stepd-worker` VM 은
 > **존재하지 않는다**(조회 결과 GCE 인스턴스 0개였다).
 > 레거시 주의: 구 시스템(shorts-vm/shorts-pg) 문서는 폐기·삭제됐고, 2026-08-12 삭제된 `apps/api`
 > (구 Python FastAPI)는 레거시 잔존물 — 현 서버(`apps/server`)는 이를 전혀 사용하지 않는다.
@@ -123,10 +123,11 @@
 - 시크릿: `stepd-db-url`(소켓) · `stepd-google-client-id/secret` · `stepd-jwt-secret` ·
   `stepd-public-url` · **`stepd-soniox-api-key`**(2026-08-07 신설).
 
-### 2-1. GEBD GPU VM — `stepd-gebd-vm`
+### 2-1. GEBD·YOLO GPU VM — `stepd-gebd-vm`
 
-화면전환 모델(TSN + SJNET)은 CUDA 가 필수라 이것만 GPU 로 남는다.
-CPU 전용 실행은 9.45초 만에 실패한다(mmaction2 가 CUDA 요구).
+화면전환 모델(TSN + SJNET)은 CUDA 가 필수라 GPU VM으로 분리했다.
+등록 출연자 식별(YOLO26n + ArcFace)도 이 VM의 **별도 `cast` lane**에서 실행한다.
+일반 `content.analyze` Cloud Run Job에는 YOLO/InsightFace 의존성을 넣지 않는다.
 
 - `g2-standard-8` + **NVIDIA L4** · zone **`us-central1-b`** · 부팅디스크 100GB pd-balanced.
   T4 를 먼저 시도했으나 us-central1 4개 존 전부 STOCKOUT 이었다.
@@ -136,16 +137,32 @@ CPU 전용 실행은 9.45초 만에 실패한다(mmaction2 가 CUDA 요구).
   이어서 하므로 spot 이 맞다. 전환 후 실제 기동까지 확인했다(용량 문제 없음).
   ⚠️ 선점이 잦아 처리가 밀리면 되돌린다:
   `gcloud compute instances set-scheduling stepd-gebd-vm --zone us-central1-b --no-preemptible --provisioning-model=STANDARD --restart-on-failure` (VM 정지 상태에서만 가능)
-- 이미지: `us-central1-docker.pkg.dev/step-d/stepd/gebd-mmaction2:latest` (**13.8GB** ·
+- 이미지: GEBD는 `us-central1-docker.pkg.dev/step-d/stepd/gebd-mmaction2:latest` (**13.8GB** ·
   원본 53.9GB 를 `devel`→`runtime` 베이스로 슬리밍). 가중치 1.58GB 는 이미지에 안 굽고
   `gs://stepd-media/models/gebd/` 에서 받는다.
+- YOLO는 GEBD 이미지에 합치지 않고 `stepd-cast-yolo:<tag>` 별도 이미지/venv로 빌드한다.
+  기본 구성은 `core/requirements.lock.txt` + `core/requirements-yolo.txt`,
+  `YOLO_CAST_DEVICE=0`, `YOLO_CAST_FACE_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider`다.
+  모델은 컨테이너에 굽지 않고 `/opt/stepd-models/yolo` 또는 GCS에서 캐시한다.
+- **현재 코드 상태:** 기본 Cloud Run content는 `RUN_YOLO_CAST=0`으로 실행하고,
+  `core/requirements-yolo.txt`가 설치된 실행 환경에서만 실제 추론한다. 현재 Cloud Run
+  content 이미지에는 이 선택 의존성을 넣지 않았으므로, 배포 전에는 `RUN_YOLO_CAST=0`으로
+  둔다(그 상태에서는 기존 익명/안전 제목 경로로 진행).
+- **GPU 배선(적용 완료):** `cast.detect`를 별도 `job_queue` 타입으로 처리해
+  이 VM의 별도 systemd/컨테이너에서 처리하는 것이다. `content.analyze`가 CPU로
+  STT·scene·beat를 만든 후 GPU VM이 `analysis/{mediaId}/beats.json`과 등록사진을 내려받아
+  `cast_detections.json`을 올리고, 완료 후 content 분석을 재큐하는 방식이다. 이 배선이
+  연결되고 smoke test를 통과한 뒤에만 `RUN_YOLO_CAST=1`을 켠다.
 - **부팅 = 처리 = 자체 종료.** `deploy/gebd/vm-startup.sh` 가 잡을 소진하고 유휴 10분이면
   `shutdown -h now`. 실측 18분 가동 후 `guestTerminate` 확인.
 - 🔒 **`--max-run-duration=3600s --instance-termination-action=STOP`** — 스크립트가 죽어도
   GCE 가 1시간이면 강제 정지시킨다. **상시 가동은 월 $533 이라 유휴 종료 실패의 손해가 245배다.**
 - 병목은 GPU 가 아니라 **CPU 측 비디오 디코딩**이다(실측 GPU 9~23% · CPU 285%) —
   비싼 GPU 를 살 이유가 없다.
-- 아직 `AUTO_GEBD=1` 은 안 켰다. 켜도 **VM 을 깨우는 배선이 없어** 잡만 쌓인다.
+- GEBD/YOLO는 최종적으로 **VM wake → queue drain → 자동 정지** 수명주기를 공유한다.
+  cast lane은 GEBD 컨테이너와 systemd 서비스를 공유하지 않아야 하며, 두 잡이 동시에 있을
+  때만 한 번 부팅해 순차 처리한다. 현재는 GEBD wake 배선만 있으므로, cast lane을 켜기 전
+  VM wake 라우트·스케줄러·재큐 로직을 먼저 연결한다.
 
 ### 3. Cloud SQL — `stepd-db`
 - PostgreSQL 15. 인스턴스 연결명 `step-d:us-central1:stepd-db`. Zonal · 디스크 10GB PD_SSD.

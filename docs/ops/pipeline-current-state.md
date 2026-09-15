@@ -1,4 +1,4 @@
-# STEP D 파이프라인 · 실제 상태 (2026-08-07 갱신)
+# STEP D 파이프라인 · 실제 상태 (2026-09-15 갱신)
 
 이 문서는 **코드 실측 기준**이다. `docs/plans/active/step-d-master-build-plan.md` 는 설계 정본이지만 낡았다.
 지금 실제로 뭐가 도는지는 여기가 정본.
@@ -65,6 +65,7 @@ content_analysis 저장 · search_segments(pgvector) 인덱싱 · 추천 배선
 | 14 | scene_type | `run_scene_type` | Gemini Vision | `scene_type.json` | interview/on_scene/other |
 | 15 | beats | `run_beats` | GEBD 경계 or fallback | `beats.json`·`boundaries.json` | **§4 참조** |
 | 15.5 | beat 신호 | `run_beat_signals` | ffmpeg 오디오 1패스 | `signals.json` | **API ₩0** · LLM 독립 축 |
+| 15.7 | 등록 출연자 | `run_yolo_cast` | YOLO26n person + ArcFace 등록사진 비교 | `cast_detections.json`·`beats.json` | 등록 사진이 있을 때 · unknown 허용 |
 | 16 | beat annotate | `run_beat_annot` | Gemini Vision | `beats.json` | **맥락 누적 · §5** |
 | 17 | speaker identity | `run_speaker_identity` | 규칙 | `speaker_identity_map.json` | cast 없으면 S1~SN 익명 |
 | 18 | shorts recommend | `run_recommend` | Gemini flash | `shorts.json` | LLM=조합·제목만, **점수는 결정론** |
@@ -239,6 +240,11 @@ python scripts/experiments/make_review_viewer.py <workdir> <video> [out.html]
 | `EMBED_BATCH` | `200` | Vertex 임베딩 1회 instance 수 (상한 250) |
 | `RUN_CHYRON_PER_SEG` | `1` | `0` = chyron 스킵 |
 | `RUN_FACES` | 미설정 | `1` = 얼굴 스테이지 |
+| `RUN_YOLO_CAST` | `1` | 등록 사진이 있으면 beat별 YOLO 출연자 식별 · `0` = 끄기 |
+| `YOLO_CAST_MODE` | `inline` | `gpu`면 content 워커는 추론을 건너뛰고 `cast.detect` GPU 레인으로 넘긴다 |
+| `YOLO_CAST_MODEL` | `yolo26n.pt` | 사람 검출 모델 |
+| `YOLO_CAST_FRAMES_PER_BEAT` | `3` | beat 대표 프레임 수(1~5) |
+| `YOLO_CAST_FACE_SIM` / `YOLO_CAST_FACE_MARGIN` | `0.35` / `0.05` | 등록 얼굴 승인 임계값 / 1·2위 점수차 |
 | `RUN_REFINE` | 미설정 | `0` = 정제 스킵 |
 | `RUN_PPL` | **off** | `1` = PPL 검출 (과다검출 + 시간 절반) |
 | `AUTO_THUMBNAIL` | 미설정 | `1` = 파이프라인 자동 썸네일 |

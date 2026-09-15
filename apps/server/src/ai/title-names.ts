@@ -62,8 +62,30 @@ export function isActorTitle(text: string, program: unknown): boolean {
     name !== m.actorName && remaining.includes(name)));
 }
 
+/** YOLO가 확인한 출연자만 배우명 제목에 허용한다. 목록이 없으면 구 회차 동작을 유지한다. */
+export function isVisibleActorTitle(text: string, program: unknown, visibleCast: unknown): boolean {
+  if (!isActorTitle(text, program)) return false;
+  if (!Array.isArray(visibleCast)) return true;
+
+  const cast = titleCastOf(program);
+  const allowed = new Set<string>();
+  for (const row of visibleCast) {
+    if (!row || typeof row !== "object") continue;
+    const value = row as { actorName?: unknown; name?: unknown };
+    const actor = typeof value.actorName === "string" ? value.actorName.trim() : "";
+    const name = typeof value.name === "string" ? value.name.trim() : "";
+    if (actor) allowed.add(actor);
+    // 구 체크포인트처럼 actorName이 없는 경우에도 등록한 극중명에서 배우명을 복원한다.
+    for (const member of cast) {
+      if (name === member.actorName || member.characterNames.includes(name)) allowed.add(member.actorName);
+    }
+  }
+  const mentioned = cast.map((m) => m.actorName).filter((name) => name && text.includes(name));
+  return mentioned.every((name) => allowed.has(name));
+}
+
 export const NAMELESS_TITLE = "다시 보는 이 장면";
 
-export function actorTitleOrFallback(text: string, program: unknown): string {
-  return isActorTitle(text, program) ? text : NAMELESS_TITLE;
+export function actorTitleOrFallback(text: string, program: unknown, visibleCast?: unknown): string {
+  return isVisibleActorTitle(text, program, visibleCast) ? text : NAMELESS_TITLE;
 }

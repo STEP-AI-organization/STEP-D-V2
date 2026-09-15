@@ -138,6 +138,7 @@ gcloud run services update-traffic stepd-server --to-revisions <리비전>=100 \
 | `content` | Cloud Run Job `stepd-worker-content` | Cloud Scheduler `*/15` · drain 모드(큐 비면 종료) |
 | `youtube` | Cloud Run Job `stepd-worker-youtube` | Cloud Scheduler `*/15` · drain 모드 |
 | `gebd` | GPU L4 spot VM `stepd-gebd-vm` | `*/10` wake · idle 시 자동 종료 |
+| `cast` | 같은 GPU VM의 별도 `stepd-worker-cast` 서비스 | `cast.detect` 큐 · GEBD와 이미지/venv 분리 |
 | `naver` | **윈도우2** (사무실 상시 PC) | 상주 · [deploy-win2.md](deploy-win2.md) |
 
 **drain 모드가 비용 구조의 핵심이다** — 상시 폴링 대신 스케줄러가 깨우고 큐가 비면 종료해
@@ -162,6 +163,17 @@ bash deploy/setup-upload-bucket.sh
 bash deploy/cloud.sh server
 bash deploy/cloud.sh worker
 ```
+
+YOLO 출연자 식별을 GPU VM에서 켜는 경우(처음 한 번):
+
+```bash
+gcloud compute ssh stepd-gebd-vm --zone us-central1-b --project step-d \
+  --command "sudo bash /opt/stepd/deploy/gebd/setup-cast-lane.sh"
+YOLO_CAST_MODE=gpu RUN_YOLO_CAST=0 bash deploy/cloud.sh worker
+```
+
+두 번째 명령은 CPU 워커의 inline 추론을 끄고 `cast.detect`만 GPU VM으로 보낸다.
+VM의 `/api/admin/gebd-vm/wake` 호출 스케줄러가 연결된 뒤에 실행한다.
 
 서버와 content 워커 둘 중 한쪽에만 `GCS_UPLOAD_BUCKET`이 들어가면 업로드는 성공해도 워커가
 다른 버킷을 찾아 후처리에 실패한다. `cloud.sh`가 두 대상에 같은 기본값을 넣도록 고정돼 있다.

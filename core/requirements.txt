@@ -53,8 +53,12 @@ Pillow==12.3.0             # 자막 오버레이 (한글 오타 회피 — nano 
 #   pip install pyannote.audio speechbrain scikit-learn
 # HuggingFace 토큰 동의 필요 (pyannote/speaker-diarization-3.1)
 
-# ── 선택 ③ 얼굴 인식 (RUN_FACES=1 · 기본 off) ────────────────────────────────
-#   pip install insightface hdbscan scikit-learn
+# ── 선택 ③ YOLO 출연자 식별 / 구 얼굴 클러스터 ──────────────────────────────
+# YOLO26n person 검출 + 등록 사진 ArcFace 비교. GPU 환경에서 별도 잠금 파일을 설치한다.
+#   pip install -r core/requirements-yolo.txt
+# RUN_YOLO_CAST=0 이 아니고 cast_photos 가 있으면 자동 실행. 구 얼굴 클러스터는 RUN_FACES=1.
+# ⚠️ Ultralytics 코드/모델과 InsightFace 사전학습 가중치의 상업용 라이선스를 배포 전에 확인.
+# 구 얼굴 클러스터 추가 의존성: hdbscan scikit-learn
 
 # ── 선택 ④ 썸네일 고급 합성 ──────────────────────────────────────────────────
 #   pip install transparent-background scipy

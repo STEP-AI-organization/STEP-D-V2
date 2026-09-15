@@ -246,7 +246,7 @@ import {
   type GenerateMode,
 } from "./ai/profile.ts";
 import { normalizeCastInput } from "./ai/cast.ts";
-import { normalizeTitleCast, titleNamesPrompt, isActorTitle } from "./ai/title-names.ts";
+import { normalizeTitleCast, titleNamesPrompt, isVisibleActorTitle } from "./ai/title-names.ts";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE, tiktokUploadEnabled,
   tiktokDirectPostEnabled,
@@ -8385,6 +8385,7 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     endTime: rec.endTime,
     sourceMediaId: master?.id,
     sourceRecommendationId: rec.id,
+    visibleCast: Array.isArray(rec.visibleCast) ? rec.visibleCast : undefined,
     beatIds: Array.isArray(rec.beatIds) ? rec.beatIds : [],
     reframe: basicReframeState(),
     // The AI's suggested destination (F3) — metadata only, still no render (§2.4). It seeds
@@ -9428,6 +9429,10 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
   const programTitlePrompt = typeof programForPrompt?.titlePrompt === "string"
     ? programForPrompt.titlePrompt.trim()
     : "";
+  const sourceRecForTitle = clip.sourceRecommendationId
+    ? await getEntity<any>("recommendation", clip.sourceRecommendationId)
+    : null;
+  const visibleCastForTitle = sourceRecForTitle?.visibleCast ?? clip.visibleCast;
 
   const start = Number(clip.startTime ?? 0);
   const end = Number(clip.endTime ?? start + (clip.durationSec ?? 0));
@@ -9511,7 +9516,7 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
     const titles: string[] = [];
     for (const t of raw) {
       const v = String(t ?? "").trim();
-      if (!v || seen.has(v) || !isActorTitle(v, programForPrompt)) continue;
+      if (!v || seen.has(v) || !isVisibleActorTitle(v, programForPrompt, visibleCastForTitle)) continue;
       seen.add(v);
       titles.push(v);
       if (titles.length >= 5) break;
@@ -12573,7 +12578,8 @@ app.get("/api/queue/stats", async (c) => {
  * docs/plans/gce-worker-restore.md 참조.
  */
 /**
- * GEBD GPU VM 깨우기 — `gebd.detect` 가 큐에 있으면 `stepd-gebd-vm` 을 START 한다.
+ * GEBD/YOLO GPU VM 깨우기 — `gebd.detect` 또는 `cast.detect` 가 큐에 있으면
+ * `stepd-gebd-vm` 을 START 한다.
  *
  * VM 은 잡을 다 처리하면 **스스로 종료**한다(`deploy/gebd/vm-startup.sh`). 그래서 반대로
  * "잡이 생겼을 때 켜 주는" 쪽이 필요하다. Cloud Scheduler 가 주기적으로 이걸 때린다.
@@ -12592,10 +12598,10 @@ app.post("/api/admin/gebd-vm/wake", async (c) => {
   // 전 테넌트 횡단(runAsSystem) — 요청자 스코프면 다른 회사 잡을 못 세 VM 이 안 깨어난다.
   const { rows } = await runAsSystem(() => getPool().query(
     `SELECT COUNT(*)::int AS n FROM job_queue
-      WHERE type = 'gebd.detect' AND status IN ('pending','running')`,
+      WHERE type IN ('gebd.detect', 'cast.detect') AND status IN ('pending','running')`,
   ));
   const pending = Number((rows[0] as { n: number } | undefined)?.n ?? 0);
-  if (pending === 0) return c.json({ waked: false, reason: "no pending gebd.detect", pending });
+  if (pending === 0) return c.json({ waked: false, reason: "no pending gebd/cast jobs", pending });
 
   // Cloud Run 의 메타데이터 서버에서 액세스 토큰 (SA 는 이미 compute 권한을 가진다)
   const tokRes = await fetch(

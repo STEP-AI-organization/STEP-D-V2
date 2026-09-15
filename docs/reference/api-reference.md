@@ -184,7 +184,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `GET /api/programs/:id/cast-photos` | 등록된 출연자 목록 + 사진 수 | → `{ cast: [{ name, photos }] }` | `fetchCastPhotos` |
-| `POST /api/programs/:id/cast-photos` | 사진 등록 (multipart `name` + `file`) | → `{ ok, name, path, bytes }`. 이름에 경로 문자 금지 400 · jpg·png·webp만 400 | `uploadCastPhoto` |
+| `POST /api/programs/:id/cast-photos` | 사진 등록 (multipart `name` + `file`) | → `{ ok, name, path, bytes }`. 이름에 경로 문자 금지 400 · jpg·png·webp만 400. 등록 사진은 다음 content 분석에서 YOLO26n 사람 검출 뒤 얼굴 임베딩 대조에 사용된다 | `uploadCastPhoto` |
 | `DELETE /api/programs/:id/cast-photos/:name` | 출연자 사진 삭제 | → `{ ok }` | `deleteCastPhotos` |
 
 ## 추천 · 클립 · 배포
@@ -356,7 +356,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `GET /api/admin/media-analysis` | 업로드 영상별 요약: 분석 상태 + 씬/쇼츠/캐스트 수 + 장르 + 에러 + 회차 pipeline 단계·진행률 | → `{ media: rows }`. 마스터 미디어당 1행 — "각 업로드에서 뭐가 나왔고 뭐가 깨졌나" 테이블. 드릴다운은 `GET /api/media/:id/analysis` | `fetchOpsMediaAnalysis` |
 | `POST /api/admin/remux/:id` | 기존 마스터를 progressive mp4로 **제자리 remux** | → `{ ok, size }`. ingest remux 이전에 올라온 파일이나 fragmented 업로드를 재교정할 때. ffmpeg+GCS 필수(400) | (웹 미사용) |
 | `POST /api/admin/worker-vm/wake` | pending 잡 있으면 워커 VM start (멱등 — 이미 RUNNING이면 no-op) | → `{ waked, instance, zone, pending }` / `{ waked:false, reason:"no pending jobs" }`. **Cloud Scheduler가 주기 호출** | (웹 미사용) |
-| `POST /api/admin/gebd-vm/wake` | pending `gebd.detect` 있으면 GEBD GPU VM start | → `{ waked, … }` / `{ waked:false, reason:"no pending gebd.detect", pending }`. 이미 실행 중이면 `already <status>`. metadata 토큰 → Compute REST `/start` | (웹 미사용) |
+| `POST /api/admin/gebd-vm/wake` | pending `gebd.detect` 또는 `cast.detect` 있으면 GEBD·YOLO GPU VM start | → `{ waked, … }` / `{ waked:false, reason:"no pending gebd/cast jobs", pending }`. 이미 실행 중이면 `already <status>`. metadata 토큰 → Compute REST `/start` | (웹 미사용) |
 
 > 두 wake 라우트 모두 **Cloud Run SA에 `roles/compute.instanceAdmin.v1`** 이 있어야 동작한다.
 > 인증은 Cloud Scheduler OIDC(= Cloud Run IAM 게이팅)로 건다.

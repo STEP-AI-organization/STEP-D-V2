@@ -147,7 +147,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
  * heavy content.analyze (STT/vision, minutes) no longer blocks the flood of light video.*
  * jobs, and vice versa. Unset / "all" keeps the legacy single worker that drains everything.
  */
-const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | "commerce" | "render", JobType[]> = {
+const JOB_LANES: Record<"content" | "youtube" | "gebd" | "cast" | "naver" | "download" | "commerce" | "render", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
   // thumbnail.* 도 content 레인. 성격이 같다 — core/thumbnail 파이썬을 스폰하고 이미지 생성
@@ -187,6 +187,9 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | 
   // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
   gebd: ["gebd.detect"],
+  // Registered cast inference is isolated from the 13.8GB GEBD image and runs in its
+  // own modern CUDA/InsightFace container on the same L4 VM.
+  cast: ["cast.detect"],
   // commerce 도 **머신 전용 lane** — naver 와 같은 이유다. 쿠팡파트너스는 최종승인 전까지
   // 공개 API 가 없어 로그인된 콘솔을 브라우저로 몰아야 하는데, 그 세션은 특정 PC 의 크롬
   // 프로필에만 산다(쿠키를 클라우드로 올리지 않는다 — 고객사 자격증명을 우리가 보관하지
@@ -318,7 +321,8 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "media.prepare": return handleMediaPrepare(job);
     case "content.analyze": {
       await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast),
-        { n: Number(job.attempts ?? 0), max: Number(job.maxAttempts ?? 0) });
+        { n: Number(job.attempts ?? 0), max: Number(job.maxAttempts ?? 0) },
+        { resumedFromCast: Boolean(job.payload.resumedFromCast) });
       return;
     }
     case "clip.reframe": {
@@ -343,6 +347,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "match.segment": return handleMatchSegment(job);
     case "match.learn": return handleMatchLearn(job);
     case "gebd.detect": return handleGebdDetect(job);
+    case "cast.detect": return handleCastDetect(job);
     case "automation.cycle": return handleAutomationCycle(job);
     case "channel.harvest": return handleChannelHarvest(job);
     case "youtube.reconcile": return handleYoutubeReconcile(job);
@@ -475,6 +480,91 @@ async function handleGebdDetect(job: Job): Promise<void> {
     console.log(`[worker/gebd] ${mediaId} boundaries.json → ${boundariesRemote} · content.analyze 재개 큐잉`);
   } finally {
     try { await fs.rm(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Registered-cast YOLO/ArcFace inference on the dedicated GPU lane.
+ *
+ * The CPU content job has already persisted beats, registry, program context, and
+ * portraits under analysis/{mediaId}/. This handler only downloads those inputs,
+ * runs the small Python CLI in the GPU venv, uploads the two changed checkpoints,
+ * then asks content.analyze to resume and regenerate title/recommendation facts.
+ */
+async function handleCastDetect(job: Job): Promise<void> {
+  const { spawnSync } = await import("node:child_process");
+  const fs = await import("node:fs/promises");
+  const fs2 = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+
+  const mediaId = String(job.payload.mediaId ?? "");
+  const videoGcs = String(job.payload.videoGcsPath ?? "");
+  const workdirPrefix = String(job.payload.workdirGcsPrefix ?? `analysis/${mediaId}`);
+  if (!mediaId || !videoGcs) throw new Error("cast.detect requires payload.mediaId, videoGcsPath");
+
+  const bucket = process.env.GCS_BUCKET || "stepd-media";
+  const asGsUrl = (p: string) => p.startsWith("gs://") ? p : `gs://${bucket}/${p.replace(/^\/+/, "")}`;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `cast-${mediaId}-`));
+  const inputDir = path.join(tmpDir, "input");
+  const outDir = path.join(tmpDir, "out");
+  const photosDir = path.join(tmpDir, "cast_photos");
+  await fs.mkdir(inputDir, { recursive: true });
+  await fs.mkdir(outDir, { recursive: true });
+  await fs.mkdir(photosDir, { recursive: true });
+  try {
+    const videoLocal = path.join(inputDir, "source.mp4");
+    const dl = spawnSync("gcloud", ["storage", "cp", asGsUrl(videoGcs), videoLocal], { encoding: "utf8" });
+    if (dl.status !== 0) throw new Error(`cast video download failed: ${(dl.stderr || dl.stdout || "").slice(0, 300)}`);
+
+    const pullJson = async (name: string): Promise<string | undefined> => {
+      try {
+        const data = await readFile(`${workdirPrefix.replace(/\/$/, "")}/${name}`);
+        const local = path.join(inputDir, name);
+        await fs.writeFile(local, data);
+        return local;
+      } catch { return undefined; }
+    };
+    const beatsPath = await pullJson("beats.json");
+    if (!beatsPath) throw new Error("cast.detect input beats.json is missing");
+    const registryPath = await pullJson("cast_registry.json");
+    const contextPath = await pullJson("program_context.json");
+
+    const photoPrefix = `${workdirPrefix.replace(/\/$/, "")}/cast_photos/`;
+    for (const objectPath of await listPrefix(photoPrefix)) {
+      const leaf = path.basename(objectPath);
+      if (!leaf || !/\.(jpe?g|png|webp|bmp)$/i.test(leaf)) continue;
+      const data = await readFile(objectPath);
+      if (data.length > 4 * 1024 * 1024) continue;
+      await fs.writeFile(path.join(photosDir, leaf), data);
+    }
+    if (!(await fs.readdir(photosDir)).some((f) => /\.(jpe?g|png|webp|bmp)$/i.test(f))) {
+      throw new Error("cast.detect has no registered portrait files");
+    }
+
+    const python = process.env.CORE_PYTHON || CORE_PYTHON_BIN;
+    const args = ["-X", "utf8", "-m", "core.vision.yolo_cast_cli",
+      "--video", videoLocal, "--beats", beatsPath, "--out", outDir, "--photos-dir", photosDir];
+    if (registryPath) args.push("--cast-registry", registryPath);
+    if (contextPath) args.push("--program-context", contextPath);
+    const run = spawnSync(python, args, {
+      cwd: CORE_REPO_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, RUN_YOLO_CAST: "1", YOLO_CAST_MODE: "inline", PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      timeout: 45 * 60 * 1000,
+    });
+    if (run.status !== 0) throw new Error(`cast YOLO failed (exit ${run.status}): ${(run.stderr || run.stdout || "").slice(-500)}`);
+
+    const detections = path.join(outDir, "cast_detections.json");
+    const beats = path.join(outDir, "beats.json");
+    if (!fs2.existsSync(detections) || !fs2.existsSync(beats)) throw new Error("cast YOLO produced no checkpoints");
+    await uploadFile(`${workdirPrefix.replace(/\/$/, "")}/cast_detections.json`, detections);
+    await uploadFile(`${workdirPrefix.replace(/\/$/, "")}/beats.json`, beats);
+    await enqueue("content.analyze", { mediaId, resumedFromCast: true },
+      { dedupeKey: `content.analyze:${mediaId}:post-cast:${Date.now()}` });
+    console.log(`[worker/cast] ${mediaId}: cast_detections.json uploaded; content.analyze requeued`);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -3527,7 +3617,7 @@ async function main(): Promise<void> {
   // ⚠️ **새 레인을 만들면 여기부터 본다.** render 를 추가한 2026-08-31 에도 똑같이 걸렸다 —
   //    워커가 부팅 즉시 죽는데 작업 스케줄러는 Running 으로 보인다. worker-lanes.test.ts 가
   //    "youtube 잡이 없는 레인은 전부 여기 있어야 한다" 를 강제한다.
-  const YT_FREE_LANES = new Set(["naver", "gebd", "download", "commerce", "render"]);
+  const YT_FREE_LANES = new Set(["naver", "gebd", "cast", "download", "commerce", "render"]);
   const NEEDS_YT = SELECTED_LANES.length === 0 || SELECTED_LANES.some((l) => !YT_FREE_LANES.has(l));
   if (NEEDS_YT && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)) {
     console.error("[worker] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are required");

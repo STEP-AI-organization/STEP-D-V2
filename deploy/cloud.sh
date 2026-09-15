@@ -58,6 +58,10 @@ do_server() {
 do_worker() {
   check_clean
   local tag_y="worker-$STAMP" tag_c="content-$STAMP"
+  # YOLO is off in the Cloud Run content worker by default. Set
+  # YOLO_CAST_MODE=gpu when the L4 cast service is installed; content then queues
+  # cast.detect instead of importing the optional CUDA stack.
+  local yolo_mode="${YOLO_CAST_MODE:-inline}" yolo_run="${RUN_YOLO_CAST:-0}"
   # 경량 잡 lane 은 core/ 가 필요 없다 (서버 Dockerfile). content lane 은 core/+python 이 필요하다.
   # ⚠️ 경량 이미지는 **서버와 같은 Dockerfile·같은 소스**다. `all` 로 방금 서버를 빌드했다면
   # 결과물이 같으므로 다시 만들 이유가 없다 — 태그만 붙인다(수 초 vs 약 5분).
@@ -96,7 +100,7 @@ do_worker() {
   # 쓰려면 "제출하고 끝내기 → 몇 시간 뒤 수거" 2단계로 바꿔야 한다(docs/ops/how-it-works.md §6).
   MSYS2_ARG_CONV_EXCL="--update-env-vars" gcloud run jobs update stepd-worker-content \
     --project="$PROJECT" --region="$REGION" \
-    --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app,GCS_UPLOAD_BUCKET="$GCS_UPLOAD_BUCKET" \
+    --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app,GCS_UPLOAD_BUCKET="$GCS_UPLOAD_BUCKET",YOLO_CAST_MODE="$yolo_mode",RUN_YOLO_CAST="$yolo_run" \
     >/dev/null 2>&1 || log "⚠️ content job env 자가치유 실패 — 수동 확인 필요"
 
   # 결제 자격증명 — **자동 충전은 워커 안에서 돈다.** automation-cycle 의 maybeAutoTopup,

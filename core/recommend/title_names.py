@@ -35,21 +35,51 @@ def is_actor_title(text, ctx):
                    for m in cast for n in m["characterNames"])
 
 
+def is_visible_actor_title(text, ctx, visible_cast):
+    """Reject configured actor names that were not identified in the selected beats.
+
+    ``is_actor_title`` only proves that a title uses actor names instead of character
+    names.  It does not prove that the actor is in this clip.  YOLO cast output supplies
+    that missing fact.  Old recommendations without ``visible_cast`` keep legacy behavior.
+    """
+    if not is_actor_title(text, ctx):
+        return False
+    if not isinstance(visible_cast, list):
+        return True
+    allowed = set()
+    cast = title_cast(ctx)
+    for row in visible_cast:
+        if not isinstance(row, dict):
+            continue
+        actor = str(row.get("actorName") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if actor:
+            allowed.add(actor)
+        for member in cast:
+            if name == str(member.get("actorName") or "").strip() or name in member.get("characterNames", []):
+                allowed.add(member["actorName"].strip())
+    allowed.discard("")
+    configured = {m["actorName"].strip() for m in cast}
+    mentioned = {name for name in configured if name and name in text}
+    return mentioned.issubset(allowed)
+
+
 def guard_title_result(result, ctx):
     """실패·휴리스틱 폴백을 포함해 모든 추천 출구에서 검증. 원문 인용은 치환하지 않는다."""
     if not title_cast(ctx):
         return result
     for short in result.get("shorts", []):
+        visible_cast = short.get("visible_cast") if "visible_cast" in short else None
         title = str(short.get("title") or "")
-        if not is_actor_title(title, ctx):
+        if not is_visible_actor_title(title, ctx, visible_cast):
             short["title"] = NAMELESS_TITLE
         lines = [str(short.get(k) or "") for k in ("title_line1", "title_line2")]
-        if not all(is_actor_title(line, ctx) for line in lines):
+        if not all(is_visible_actor_title(line, ctx, visible_cast) for line in lines):
             # 두 줄 중 하나만 버리면 문장 의미가 바뀐다. 검증한 한 줄 제목으로 함께 대체한다.
             short["title_line1"] = ""
             short["title_line2"] = ""
         if isinstance(short.get("title_candidates"), list):
             short["title_candidates"] = list(dict.fromkeys(
                 [short.get("title") or NAMELESS_TITLE] + [c for c in short["title_candidates"]
-                 if isinstance(c, str) and c.strip() and is_actor_title(c, ctx)]))
+                 if isinstance(c, str) and c.strip() and is_visible_actor_title(c, ctx, visible_cast)]))
     return result

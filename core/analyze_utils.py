@@ -20,7 +20,7 @@ CHECKPOINTS = (
     "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json",
     "shorts.json", "analysis.json", "segments.json",
     # 2026-08-06 추가 — 빠져 있으면 "다른 영상" 초기화 때 살아남아 오염된다
-    "signals.json", "genre.json", "chyron.json",
+    "signals.json", "genre.json", "chyron.json", "cast_detections.json",
 )
 
 
@@ -54,6 +54,7 @@ def prepare_checkpoints(
     profile: dict | None = None,
     channels: list[str] | None = None,
     cast_registry: list[dict] | None = None,
+    program_context: dict | None = None,
 ) -> None:
     """Keep checkpoints only if they belong to THIS video AND were produced with the same
     params. Two independent invalidations:
@@ -91,6 +92,7 @@ def prepare_checkpoints(
     INDEX_VER = "2026-08-07-init"   # segments.json (검색 인덱스) 재조립 로직 버전
     STT_VER = "2026-07-27-word-normalize"
     VIEWER_SIGNALS_VER = "2026-07-28-init"
+    YOLO_CAST_VER = "2026-09-15-yolo26-beat-cast-v1"
     # ⚠️ 이 값이 stt.json 지문에 들어간다 — 기본값이 다른 곳과 어긋나면 체크포인트가
     #    무효화돼 STT 를 다시 산다(≈₩270). 확정 스택인 "soniox" 로 통일한다.
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "soniox").lower()
@@ -118,6 +120,40 @@ def prepare_checkpoints(
             _boundaries_hash = hashlib.sha1(_boundaries_path.read_bytes()).hexdigest()[:16]
         except OSError:
             pass
+    # Registered cast photos are model input. Hash bytes, not filenames only: replacing a
+    # portrait under the same name must invalidate cast detections and title recommendations.
+    _cast_photos_hash = ""
+    _cast_photos_dir = out_dir / "cast_photos"
+    if _cast_photos_dir.is_dir():
+        try:
+            h = hashlib.sha1()
+            for photo in sorted(p for p in _cast_photos_dir.iterdir() if p.is_file()):
+                h.update(photo.name.encode("utf-8"))
+                h.update(photo.read_bytes())
+            _cast_photos_hash = h.hexdigest()[:16]
+        except OSError:
+            pass
+    _yolo_cast_params = (
+        YOLO_CAST_VER,
+        os.environ.get("YOLO_CAST_MODE", "inline"),
+        os.environ.get("RUN_YOLO_CAST", "1"),
+        os.environ.get("YOLO_CAST_MODEL", "yolo26n.pt"),
+        os.environ.get("YOLO_CAST_FRAMES_PER_BEAT", "3"),
+        os.environ.get("YOLO_CAST_FACE_SIM", "0.35"),
+        os.environ.get("YOLO_CAST_FACE_MARGIN", "0.05"),
+        os.environ.get("YOLO_CAST_FACE_PROVIDERS", ""),
+        os.environ.get("YOLO_CAST_FACE_MODEL", "buffalo_l"),
+        os.environ.get("YOLO_CAST_DEVICE", ""),
+        os.environ.get("YOLO_CAST_IMGSZ", "640"),
+        os.environ.get("YOLO_CAST_PERSON_CONF", "0.25"),
+        os.environ.get("YOLO_CAST_MIN_HITS", "1"),
+        os.environ.get("YOLO_CAST_MIN_COVERAGE", "0.20"),
+        os.environ.get("YOLO_CAST_BATCH", "16"),
+        os.environ.get("YOLO_CAST_MODEL_ROOT", ""),
+        _cast_photos_hash,
+        cast_registry,
+        (program_context or {}).get("titleCast"),
+    )
     params = {
         "stt.json": fingerprint(STT_VER, STT_PROVIDER_ENV),
         "refined.json": fingerprint(cast_registry, REFINE_VER, STT_VER, STT_PROVIDER_ENV),
@@ -130,15 +166,17 @@ def prepare_checkpoints(
         # signals 는 beat 구간에 매달린 값이라 beats 가 바뀌면 통째로 무효다 (beat id 가 달라진다).
         "signals.json": fingerprint(SIGNALS_VER, BEATS_VER, SHOTS_VER, STT_VER, _boundaries_hash),
         "viewer_signals.json": fingerprint(VIEWER_SIGNALS_VER, _comments_hash),
+        "cast_detections.json": fingerprint(*_yolo_cast_params),
         # ⚠️ segments.json 은 CHECKPOINTS 에는 있었지만 여기 params 에 **없었다**.
         # 무효화 루프가 params.items() 만 돌기 때문에 이 파일은 **한 번 만들어지면 영영
         # 갱신되지 않았다.** 2026-08-07 실측: 경계 교체로 beats 가 182 → 413 개가 됐는데
         # segments.json 은 182개(beat 0~181 참조)로 남아, 검색 인덱스가 존재하지도 않는
         # beat 을 가리켰다. 검색이 이 리포의 목적물인데 그게 통째로 낡아 있었다.
         "segments.json": fingerprint(genre, INDEX_VER, BEATS_VER, SIGNALS_VER,
-                                     SCENE_TYPE_VER, REFINE_VER, STT_VER, _boundaries_hash),
-        "shorts.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash),
-        "analysis.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash),
+                                     SCENE_TYPE_VER, REFINE_VER, STT_VER, _boundaries_hash,
+                                     _yolo_cast_params),
+        "shorts.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, (program_context or {}).get("titleCast"), RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash, _yolo_cast_params),
+        "analysis.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, (program_context or {}).get("titleCast"), RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash, _yolo_cast_params),
     }
     manifest = {"video_name": video_name, "video_size": video_size, "params": params}
 
