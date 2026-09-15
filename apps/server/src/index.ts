@@ -5600,15 +5600,11 @@ function buildStaticOverlayItems(
       text: L.text, x: L.bx, y: L.by, align: L.align, baseline: "top",
       fontPx: L.fitPx, weight: 800, font: typeof L.t?.font === "string" ? L.t.font : undefined,
       color: L.colorHex, opacity: 1,
-<<<<<<< HEAD
       ...(L.spacing ? { letterSpacing: L.spacing } : {}),
-      ...(titleShadowOn ? { shadow: { offsetY: 2 * scale, blur: 6 * scale, color: "rgba(0,0,0,0.5)" } } : {}),
-=======
-      // 그림자는 **줄이 정한다.** 예전엔 여기 고정값이 박혀 있어 편집으로 못 바꿨다
-      // (타입은 원래 받고 있었는데 빌더가 안 읽었다 · 2026-09-14).
-      // 미설정이면 예전 값 그대로 — 무회귀가 기본이다. `null` 은 "그림자 끔" 이다.
-      shadow: titleShadowOf(L.t, scale),
->>>>>>> 9d8628c (feat(overlay): 제목 줄마다 글꼴·크기·외곽선·그림자를 정한다)
+      // 그림자는 **줄이 정한다**(9d8628c) — 예전엔 여기 고정값이 박혀 있어 편집으로 못 바꿨다.
+      // 템플릿 전역 스위치(titleShadow=false · #45)와 같은 자리에서 만나서, 우선순위는
+      // **줄 명시(끔=null 포함) > 전역 끔 > 예전 기본(켬)** — 더 구체적인 쪽이 이긴다.
+      shadow: L.t?.shadow === undefined && !titleShadowOn ? undefined : titleShadowOf(L.t, scale),
       stroke,
     });
   }
@@ -5699,19 +5695,17 @@ function buildEditorAss(
       const color = hexToAss(L.colorHex);
       // 글꼴 — canvas-PNG 경로(overlay-canvas)와 같은 값을 ASS 에도 얹는다. 안 얹으면 이 경로만
       // Style Default(Pretendard) 로 나가 같은 영상 안에서 줄마다 글꼴이 달라진다.
-<<<<<<< HEAD
-      // 자간(\fsp · 출력 px)·그림자 끄기(\shad0)도 같은 이유로 얹는다 — PNG 경로와 시각 일치.
+      // 자간(\fsp · 출력 px)도 같은 이유로 얹는다 — PNG 경로와 시각 일치(#45).
       const fnTag = (ASS_FONT_BY_ID[String((t as any)?.font ?? "")] ? `\\fn${ASS_FONT_BY_ID[String((t as any).font)]}` : "")
-        + (L.spacing ? `\\fsp${Math.round(L.spacing)}` : "")
-        + ((es as any).titleShadow === false ? "\\shad0" : "");
-=======
-      const fnTag = ASS_FONT_BY_ID[String((t as any)?.font ?? "")] ? `\\fn${ASS_FONT_BY_ID[String((t as any).font)]}` : "";
+        + (L.spacing ? `\\fsp${Math.round(L.spacing)}` : "");
       // 외곽선·그림자도 canvas-PNG 와 **같은 줄 값**에서 온다. 이 경로는 PNG 생성이 실패했을
       // 때만 도는 폴백인데, 예전엔 외곽선이 `bord 2` 고정이고 그림자는 `\shad1` 고정이라
       // **폴백이 걸린 영상만 모양이 달랐다**(줄의 stroke 를 canvas 만 읽고 있었다).
       // 사람이 볼 때 "가끔 다르게 나온다" 가 되는데, 가끔이라서 더 못 찾는다.
-      const styleTag = assTitleStyleTag(t, scale);
->>>>>>> 9d8628c (feat(overlay): 제목 줄마다 글꼴·크기·외곽선·그림자를 정한다)
+      // 줄이 그림자를 안 정했을 때만 템플릿 전역 끔(titleShadow=false · #45)을 \shad0 으로
+      // 얹는다 — canvas-PNG 경로(buildStaticOverlayItems)와 같은 우선순위.
+      const styleTag = assTitleStyleTag(t, scale)
+        + ((t as any)?.shadow === undefined && (es as any).titleShadow === false ? "\\shad0" : "");
       const fs = assFs(fitPx);
       const win = winFor(t);
       if (win) {
