@@ -17,8 +17,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
+import { routeSource } from "./sources.ts";
+
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const INDEX = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+// 라우트가 사는 모든 파일. `/api/naver/login-tool` 은 2026-09-15 에 `naver/routes.ts` 로
+// 옮겼다 — `index.ts` 만 읽으면 검사 대상이 사라져 조용히 통과한다.
+const INDEX = routeSource(SRC);
 const TOOL = fs.readFileSync(path.resolve(SRC, "../scripts/naver-login-tool.mts"), "utf-8");
 const STORAGE = fs.readFileSync(path.join(SRC, "media/storage-gcs.ts"), "utf-8");
 const WEB = fs.readFileSync(

@@ -362,4 +362,24 @@ describe("e2e — 도메인 폴더로 옮긴 라우트가 등록돼 있다", () 
     const { status } = await s.json("/api/reports");
     assert.equal(status, 200, "등록 안 됨(404면 registerReportRoutes 누락)");
   });
+
+  it("naver/routes.ts — GET /api/naver/accounts 가 200 이다", async () => {
+    // 분할 2호(2026-09-15). 네이버는 라우트 13개가 통째로 옮겨간 첫 도메인이다.
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+    const { status, body } = await s.json<{ accounts?: unknown[] }>("/api/naver/accounts");
+    assert.equal(status, 200, `등록 안 됨(404면 registerNaverRoutes 누락): ${JSON.stringify(body)}`);
+    assert.ok(Array.isArray(body.accounts), "accounts 배열이 아니다");
+  });
+
+  it("naver/routes.ts — 계정 목록은 세션·자격증명 값을 싣지 않는다", async () => {
+    // 옮기는 과정에서 응답 모양이 바뀌지 않았는지. 소스 스캔이 보는 것과 별개로
+    // **실제 응답**에 봉인된 값이 섞이지 않았는지는 여기서만 증명된다.
+    const s = new Session();
+    await s.login(OWNER.email, OWNER.password);
+    const raw = await (await s.fetch("/api/naver/accounts")).text();
+    for (const leak of ["session_blob", "cred_blob", "storageState"]) {
+      assert.equal(raw.includes(leak), false, `응답에 ${leak} 이 실렸다`);
+    }
+  });
 });
