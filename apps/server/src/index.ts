@@ -10221,6 +10221,41 @@ async function serializeRenderPlan(
  * 줄 수가 바뀌면 마지막 줄의 스타일(크기·색·글꼴)을 복제해 새 줄에 입힌다 — 스타일을
  * 비우면 렌더가 기본값으로 떨어져 "글자만 바꿨는데 서식이 달라졌다" 가 된다.
  */
+/**
+ * 지금 **박혀 있는** 제목 줄을 읽는다 — 고치기 전에 보여주려면 이게 필요하다.
+ *
+ * ## 왜 별도 라우트인가
+ * `GET /api/state` 는 api-key 호출(외부 콘솔)에 `editorState` 를 **통째로 뺀다** — 클립마다
+ * base64 아이콘이 딸려 와 ENA 기준 19.4MB 였던 걸 잘라낸 조치다. 그 결과 콘솔은 지금 화면에
+ * 뭐라고 굽혀 있는지를 **알 길이 없었고**, 수정 칸이 늘 빈 채로 열려 사용자가 현재 문구를
+ * 모른 채 덮어쓰게 돼 있었다(2026-09-14 발견).
+ *
+ * 그렇다고 `/state` 에 editorState 를 되돌리면 그 19.4MB 가 그대로 돌아온다. 대신 **필요한
+ * 것만** 주는 좁은 읽기 경로를 연다 — 줄(글자·색)과 그릴 위치뿐이라 수백 바이트다.
+ * 콘솔의 실시간 미리보기가 실렌더와 같은 그림을 그리려면 `titleY`·글꼴·강조색이 같이 와야 한다.
+ */
+app.get("/api/clips/:id/overlay-title", async (c) => {
+  const clip = await getEntity<any>("clip", c.req.param("id"));
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+  const es = (clip.editorState ?? {}) as Record<string, unknown>;
+  const lines = Array.isArray(es.titleLines) ? (es.titleLines as Record<string, unknown>[]) : [];
+  return c.json({
+    ok: true,
+    titleLines: lines.map((l) => ({
+      id: String(l?.id ?? ""),
+      text: String(l?.text ?? ""),
+      color: String(l?.color ?? ""),
+      size: typeof l?.size === "number" ? l.size : null,
+      font: String(l?.font ?? ""),
+    })),
+    // 미리보기 기하 — 콘솔이 실렌더와 같은 자리에 그리려면 이 셋이 있어야 한다.
+    titleY: typeof es.titleY === "number" ? es.titleY : null,
+    titleAlign: String(es.titleAlign ?? "center"),
+    aspectRatio: String(clip.aspectRatio ?? es.aspectRatio ?? ""),
+    rendered: clip.rendered !== false,
+  });
+});
+
 app.patch("/api/clips/:id/overlay-title", async (c) => {
   const clipId = c.req.param("id");
   const clip = await getEntity<any>("clip", clipId);
@@ -10230,16 +10265,30 @@ app.patch("/api/clips/:id/overlay-title", async (c) => {
   if (!b || !Array.isArray(b.lines)) {
     return c.json({ error: "bad_request", message: "lines 배열이 필요합니다." }, 400);
   }
-  // 빈 줄은 버린다 — 빈 문자열을 그대로 두면 렌더가 빈 줄 자리를 잡아 제목이 밀린다.
-  const lines = b.lines.map((t) => String(t ?? "").trim()).filter(Boolean).slice(0, 3);
+  // 줄은 **두 가지 모양**을 받는다: `"글자"` 와 `{ text, color }`.
+  // 색을 고칠 수 있어야 한다는 요구(2026-09-14)가 나중에 붙었는데, 기존 호출부가 문자열
+  // 배열을 보내고 있어 모양을 갈아치우면 그쪽이 조용히 깨진다. 둘 다 받는다.
+  const parsed = b.lines.map((raw) => {
+    const o = (raw && typeof raw === "object") ? raw as Record<string, unknown> : null;
+    const text = String((o ? o.text : raw) ?? "").trim();
+    const c0 = String(o?.color ?? "").trim();
+    // #RRGGBB 만 통과시킨다. 아무 문자열이나 흘려보내면 렌더(ASS)가 조용히 기본색으로
+    // 떨어져 "바꿨는데 그대로" 가 된다 — factory 의 titleColor 검증과 같은 규칙이다.
+    return { text, color: /^#[0-9a-fA-F]{6}$/.test(c0) ? c0.toUpperCase() : "" };
+  })
+    // 빈 줄은 버린다 — 빈 문자열을 그대로 두면 렌더가 빈 줄 자리를 잡아 제목이 밀린다.
+    .filter((l) => l.text).slice(0, 3);
 
   const es = (clip.editorState ?? {}) as Record<string, unknown>;
   const prev = Array.isArray(es.titleLines) ? (es.titleLines as Record<string, unknown>[]) : [];
   const style = prev[prev.length - 1] ?? {};
-  const nextLines = lines.map((text, i) => ({
+  const nextLines = parsed.map((l, i) => ({
     ...(prev[i] ?? style),      // 있던 줄은 그 스타일, 새 줄은 마지막 줄 스타일을 물려받는다
     id: `t${i}`,
-    text,
+    text: l.text,
+    // 색은 **보냈을 때만** 덮는다. 안 보낸 줄은 있던 색 그대로 — 문자열 배열로 부르는
+    // 기존 호출부가 색을 날려 먹지 않게 하는 자리다.
+    ...(l.color ? { color: l.color } : {}),
   }));
 
   await putEntity("clip", clipId, {

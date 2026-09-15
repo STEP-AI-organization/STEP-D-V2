@@ -234,6 +234,11 @@ export const API_KEY_ROUTES: RouteRule[] = [
   // ⚠️ **`/clips/:id/editor` 는 열지 않는다.** 그건 editorState 를 통째로 덮어, 콘솔이
   //    안 들고 있는 트랙·리프레임·아이콘을 지운다. 좁은 이 라우트만 연다.
   { method: "PATCH", path: /^\/api\/clips\/[^/]+\/overlay-title$/, scope: "factory:write" },
+  // 읽기도 같이 연다 — `/api/state` 가 api-key 호출에는 editorState 를 통째로 빼므로
+  // (19.4MB 경량화) 콘솔은 **지금 뭐라고 박혀 있는지** 알 길이 없었다. 그래서 수정 칸이
+  // 늘 빈 채로 열려 현재 문구를 모른 채 덮어쓰게 돼 있었다(2026-09-14). 이 라우트는
+  // 줄(글자·색)과 그릴 위치만 돌려주므로 경량화를 되돌리지 않는다.
+  { method: "GET", path: /^\/api\/clips\/[^/]+\/overlay-title$/, scope: "factory:read" },
 
   // 결제 수단 **등록만** (2026-08-20). 카드번호는 브라우저 → 포트원으로 직행하고 우리는
   // 빌링키만 받는다. 아래 셋 외의 결제 경로는 전부 세션 전용으로 남는다 —
