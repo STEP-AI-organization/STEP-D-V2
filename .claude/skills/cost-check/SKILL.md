@@ -92,7 +92,7 @@ select media_id, quantity as 분, cost_krw,
 
 정본: [docs/ops/infra.md](../../../docs/ops/infra.md)
 
-- 고정비 ≈ **₩125,000~140,000/월** (Cloud SQL ₩69,800 + `stepd-server` min-instances=1 ₩36,000~55,000 + GEBD 부팅디스크 ₩13,800 …)
+- 고정비 ≈ **₩195,000~210,000/월** (Cloud SQL 2vCPU·8GB ₩139,600 — 2026-09-16 스펙업 + `stepd-server` min-instances=1 ₩36,000~55,000 + GEBD 부팅디스크 ₩13,800 …)
 - 변동비 = **분당 ₩15.4** (벤더 11.1 + 인프라 4.3)
 - **회차 수가 아니라 분으로 곱할 것.** 실측 평균이 17.3분이라 "N건 × 60분 단가" 는 3.5배 부풀려진다.
 - 지금 물량(월 ~693분)에서 **총액의 90%가 고정비다** → 줄이는 레버는 파이프라인이 아니라 Cloud SQL·min-instances.

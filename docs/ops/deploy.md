@@ -135,7 +135,7 @@ gcloud run services update-traffic stepd-server --to-revisions <리비전>=100 \
 
 | 레인 | 어디 | 어떻게 깨어나나 |
 |---|---|---|
-| `content` | Cloud Run Job `stepd-worker-content` | Cloud Scheduler `*/15` · drain 모드(큐 비면 종료) |
+| `content` | Cloud Run Job `stepd-worker-content` | **enqueue 즉시 킥**(서버 `worker-kick.ts` · taskCount=4 오버라이드 · 2026-09-16) + Cloud Scheduler `*/15` 안전망 · drain 모드(큐 비면 종료) · 템플릿 tasks=1·parallelism=4 |
 | `youtube` | Cloud Run Job `stepd-worker-youtube` | Cloud Scheduler `*/15` · drain 모드 |
 | `gebd` | GPU L4 spot VM `stepd-gebd-vm` | `*/10` wake · idle 시 자동 종료 |
 | `cast` | 같은 GPU VM의 별도 `stepd-worker-cast` 서비스 | `cast.detect` 큐 · GEBD와 이미지/venv 분리 |

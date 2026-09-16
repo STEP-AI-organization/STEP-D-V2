@@ -11,6 +11,7 @@
  */
 import { getPool, getRawPool } from "../db-pg.ts";
 import { runAsSystem } from "../auth/tenant.ts";
+import { maybeKickContentWorker } from "./worker-kick.ts";
 
 export type JobType =
   // 네이버 TV 업로드 — 공개 API 가 없어 브라우저 자동화. `naver` 레인(사무실 PC) 전용.
@@ -201,7 +202,11 @@ export async function enqueue(
      RETURNING id`,
     [id, type, JSON.stringify(payload), now + (opts.delayMs ?? 0), opts.dedupeKey ?? null, maxAttempts, now],
   );
-  return rows[0]?.id ?? null;
+  const inserted = rows[0]?.id ?? null;
+  // content 레인이면 워커를 즉시 깨운다(서지 대응 · worker-kick.ts). dedupe 충돌(null)은
+  // 이전 enqueue 가 이미 킥했고, 지연 잡은 claim 필터(runAfter)에 안 걸려 헛킥이라 스킵.
+  if (inserted && !opts.delayMs) maybeKickContentWorker(type);
+  return inserted;
 }
 
 /**
