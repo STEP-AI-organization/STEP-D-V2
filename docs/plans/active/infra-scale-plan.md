@@ -31,7 +31,7 @@ DB 스펙업/HA · 서버 min-instances 증설.
 |---|---|---|---|---|---|
 | **① GPU VM 2호기** (gebd·cast 병렬) | `gebd.detect`·`cast.detect` 의 createdAt→lockedAt 대기 (`/api/admin/jobs` 또는 §2 쿼리) | p95 > 30분이 서지마다 반복 | `deploy/gebd/` 스크립트로 VM 복제 · 레인은 큐 경쟁이라 코드 변경 0 (SKIP LOCKED) | 디스크 ₩13,800 + spot 가동 ~₩300/h | 반나절 |
 | **② inpaint GPU 레인** (AI 자막 지우기) | 제품 결정 — LaMa(Apache 2.0) 채택 확정 | 결정 즉시 | 기존 GPU VM 에 레인 추가(고정비 0) → ①과 경합 실측되면 2호기로 | 가동시간만 | 2~4일 (배선) |
-| **③ DB 스펙업** (1→2vCPU·8GB) | Cloud SQL CPU·커넥션 (Cloud Monitoring) | CPU p95 > 70% 5분 지속 **또는** 커넥션 > 60/100 | 티어 변경 (재시작 수 분 — 새벽에) | +₩69,800 | 10분 + 공지 |
+| ~~③ DB 스펙업~~ (1→2vCPU·8GB) | **2026-09-16 선제 적용됨**(사용자 지시 · 트리거 대기 없이 — 병렬 4 분석의 공유 병목 대비) | — | 완료 · 재시작 수 분으로 무사 | +₩69,800 반영 | — |
 | **④ DB HA** (장애 대기 인스턴스) | 사업 신호 — 유료 고객 SLA 요구, 또는 월매출 > 고정비 3배 | 계약 조건 발생 시 | HA 활성화 | +₩69,800 | 1시간 |
 | **⑤ 서버 min-instances 1→2** | `/api/state` p95 지연 · 프록시 fetch failed 재발 (Cloud Run 지표) | p95 > 1.5s 상시 | cloudbuild.yaml `--min-instances` | +₩36,000~55,000 | 배포 1회 |
 | **⑥ 분석 병렬 4→8** | 서지 중 4태스크 풀가동인데 큐 대기 유지 (executions 로그 + §2 쿼리) | 반복 관측 시 | `gcloud run jobs update --parallelism=8` + worker-kick taskCount 상향 | ₩0 고정 | 10분 · ⚠️ DB 커넥션 상한 점검(태스크×5) |
@@ -57,3 +57,5 @@ DB 스펙업/HA · 서버 min-instances 증설.
 
 - **2026-09-16 작성.** 서지 대응 1차(킥·병렬4·틱 5분·렌더 maxScale10) 적용과 동시에.
   사용자 결정: GPU VM 2호기·사무실 PC·DB/서버 스펙업은 선구매하지 않고 트리거로 미룸.
+- **2026-09-16 같은 날 갱신**: ③ DB 스펙업은 사용자 지시로 선제 적용(2vCPU·8GB · +₩69,800).
+  §2 의 감시 배선 중 Monitoring 알림 2개(SQL CPU·worker-kick 실패 → hkj@stepai.kr 메일)도 생성됨.
