@@ -13254,11 +13254,17 @@ app.get("/api/queue/stats", async (c) => {
 app.post("/api/admin/gebd-vm/wake", async (c) => {
   requireOpsOrInternal(c, currentContext()?.via);
   const project = process.env.GOOGLE_CLOUD_PROJECT || "step-d";
-  const zone = process.env.GEBD_VM_ZONE || "us-central1-b";
-  // 다중 VM (2026-09-16 · 2호기 증설): 콤마 목록. **대기 잡 수만큼만** 깨운다 — 잡 1건에
+  const defaultZone = process.env.GEBD_VM_ZONE || "us-central1-b";
+  // 다중 VM (2026-09-16 · 2호기 증설): 콤마 목록, 항목은 `이름` 또는 `이름:존`.
+  // 존 표기가 필요한 이유: 2호기 생성 때 us-central1-b 의 L4 spot 이 품절이라 -a 에 만들었다
+  // — 존을 섞어 두면 동시 품절 리스크도 갈라진다. **대기 잡 수만큼만** 깨운다 — 잡 1건에
   // 두 대를 켜면 한 대는 헛부팅(10분 idle 자기종료 ≈ ₩50)이라, pending ≥ 2 부터 2호기.
   const instances = (process.env.GEBD_VM_NAMES || process.env.GEBD_VM_NAME || "stepd-gebd-vm")
-    .split(",").map((s) => s.trim()).filter(Boolean);
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .map((entry) => {
+      const [name, entryZone] = entry.split(":").map((s) => s.trim());
+      return { name, zone: entryZone || defaultZone };
+    });
 
   // 대기 중인 gebd.detect 가 있는지 — 없으면 켜지 않는다 (VM 이 켜지면 시간당 과금이다).
   // 전 테넌트 횡단(runAsSystem) — 요청자 스코프면 다른 회사 잡을 못 세 VM 이 안 깨어난다.
@@ -13278,16 +13284,16 @@ app.post("/api/admin/gebd-vm/wake", async (c) => {
   const { access_token: token } = (await tokRes.json()) as { access_token: string };
 
   // VM 별 실패는 그 VM 만 건너뛴다 — 2호기가 없거나 죽어도 1호기 기동을 막으면 안 된다.
-  const results: { instance: string; started?: boolean; reason?: string; error?: string }[] = [];
-  for (const instance of instances.slice(0, Math.max(1, Math.min(pending, instances.length)))) {
+  const results: { instance: string; zone: string; started?: boolean; reason?: string; error?: string }[] = [];
+  for (const { name: instance, zone } of instances.slice(0, Math.max(1, Math.min(pending, instances.length)))) {
     const base = `https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${instance}`;
     try {
       const cur = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
-      if (!cur.ok) { results.push({ instance, error: `instance 조회 실패 ${cur.status}` }); continue; }
+      if (!cur.ok) { results.push({ instance, zone, error: `instance 조회 실패 ${cur.status}` }); continue; }
       const status = ((await cur.json()) as { status?: string }).status;
       // RUNNING/STAGING 이면 이미 일하는 중 — 중복 start 는 409 를 부른다.
       if (status && status !== "TERMINATED" && status !== "SUSPENDED") {
-        results.push({ instance, reason: `already ${status}` });
+        results.push({ instance, zone, reason: `already ${status}` });
         continue;
       }
       const start = await fetch(`${base}/start`, {
@@ -13295,17 +13301,17 @@ app.post("/api/admin/gebd-vm/wake", async (c) => {
         headers: { Authorization: `Bearer ${token}`, "Content-Length": "0" },
       });
       if (!start.ok) {
-        results.push({ instance, error: `start 실패 ${start.status}: ${(await start.text()).slice(0, 160)}` });
+        results.push({ instance, zone, error: `start 실패 ${start.status}: ${(await start.text()).slice(0, 160)}` });
         continue;
       }
       console.log(`[gebd-vm] ${instance} START (대기 ${pending}건)`);
-      results.push({ instance, started: true });
+      results.push({ instance, zone, started: true });
     } catch (e) {
-      results.push({ instance, error: String(e).slice(0, 120) });
+      results.push({ instance, zone, error: String(e).slice(0, 120) });
     }
   }
   const waked = results.some((r) => r.started);
-  return c.json({ waked, pending, zone, results });
+  return c.json({ waked, pending, results });
 });
 
 app.post("/api/admin/worker-vm/wake", async (c) => {
