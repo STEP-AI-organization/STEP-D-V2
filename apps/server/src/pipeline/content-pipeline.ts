@@ -24,6 +24,7 @@
  */
 import { spawn } from "node:child_process";
 import { CAPTION_LANGS, DEFAULT_LANG, isForeign, langOf } from "../media/caption-lang.ts";
+import { analysisNote } from "./analysis-note.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1171,11 +1172,23 @@ async function syncProgramFromFaces(
  * decision are skipped so the same span isn't offered (and re-adopted) twice.
  * Degenerate spans are dropped, not silently stretched.
  */
+/**
+ * @returns `wrote` 이번에 새로 올린 추천 수 · `kept` 사람이 이미 처리해 둔(채택·거절) 추천 수.
+ *
+ * **둘을 갈라서 돌려주는 이유** (2026-09-16): 호출부가 회차 문구를 `wrote` 하나로만 정해서,
+ * **재분석이 멀쩡한 회차를 "추천 없음" 으로 바꿔 놓았다.** 사람이 추천을 다 채택한 뒤 같은
+ * 미디어를 다시 분석하면 아래 `overlapsKept` 가 새 제안을 전부 걸러내 `wrote = 0` 이 되는데,
+ * 그건 "추천이 없다" 가 아니라 "새로 제안할 게 없다" 다.
+ *
+ * 실제 사례 — 나미브 18회차: 09-10 분석에서 3건이 나와 전부 채택됐고, 09-15 cast 레인 스모크가
+ * 같은 master 를 다시 분석하면서 문구가 `분석 완료 · 추천 없음` 으로 덮였다. 운영자에게는
+ * 분석이 실패한 것처럼 보였다(데이터는 멀쩡했다).
+ */
 async function writeRecommendationsFromShorts(
   episodeId: string,
   shorts: Short[],
   durationSec: number,
-): Promise<number> {
+): Promise<{ wrote: number; kept: number }> {
   const valid = shorts.filter((s) => {
     const start = Number(s.start) || 0;
     const end = Number(s.end) || 0;
@@ -1234,7 +1247,7 @@ async function writeRecommendationsFromShorts(
   } finally {
     client.release();
   }
-  return sorted.length;
+  return { wrote: sorted.length, kept: kept.length };
   }
 
   /**
@@ -2221,9 +2234,13 @@ export async function runContentAnalyze(
     const shorts: Short[] = Array.isArray(analysis?.shorts) ? analysis.shorts : [];
     // Surface the AI shorts on the episode's recommendation board (the product payoff).
         let wrote = 0;
+        // 사람이 이미 채택·거절해 둔 추천 수. 재분석에서 `wrote` 가 0 이어도 이게 있으면
+        // "추천 없음" 이 아니다 — 아래 문구 분기가 이걸 본다.
+        let keptRecs = 0;
         if (media.episodeId && shorts.length) {
           try {
-            wrote = await writeRecommendationsFromShorts(media.episodeId, shorts, media.durationSec ?? 0);
+            ({ wrote, kept: keptRecs } =
+              await writeRecommendationsFromShorts(media.episodeId, shorts, media.durationSec ?? 0));
           } catch (e) {
             console.error(`[worker] content.analyze ${mediaId}: failed to write recommendations`, e);
           }
@@ -2250,7 +2267,9 @@ export async function runContentAnalyze(
       await setEpisodePipeline(media.episodeId, {
         stage: "recommend",
         stageStatus: "done",
-        note: wrote ? `AI 쇼츠 추천 ${wrote}건` : "분석 완료 · 추천 없음",
+        // 세 갈래다 — 재분석의 `wrote === 0` 과 **처음부터 추천이 안 나온 것**은 운영자가 할
+        // 일이 정반대인데 예전엔 둘 다 "추천 없음" 이었다. 근거는 `analysis-note.ts` 에.
+        note: analysisNote(wrote, keptRecs),
         progress: 100,
       }).catch((e) => console.error("[worker] failed to update episode pipeline", e));
     }
