@@ -384,6 +384,7 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 > 스케줄 틱은 1태스크 안전망으로 남는다. 분석 착수 지연: 최대 15분 → **60초 미만**, 병렬 4편.
 > 고정비 변화 없음(킥당 남는 태스크 비용 ~₩6 · 일 있을 때만). `stepd-render` max-instances 5→10
 > (min0 라 고정비 0). 킥이 못 닿는 출처(윈도우2·GPU VM·youtube Job 발 enqueue)는 틱이 처리한다.
+> **다음 증설의 결정 기준(트리거·임계·비용)은 [../plans/active/infra-scale-plan.md](../plans/active/infra-scale-plan.md) 가 소유한다.**
 
 ### 월 총액
 
