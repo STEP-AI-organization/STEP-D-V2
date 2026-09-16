@@ -254,6 +254,7 @@ import {
   instagramUploadEnabled, facebookUploadEnabled,
 } from "./publish/upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./ai/gemini.ts";
+import { openaiGenerate, openaiMetadataModel } from "./ai/openai.ts";
 import { ask as chatbotAsk, ChatbotError } from "./chatbot/agent.ts";
 import {
   candidates as harvestCandidates, clampCap, clampMinDuration, estimate as harvestEstimate,
@@ -10021,7 +10022,12 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     //    temperature 는 낮게: 사실을 다루는 작업이라 실행마다 달라질 이유가 없다.
     //    thinking:false — JSON 을 뽑는 호출이라 추론이 예산만 먹는다. schema 가 없으면
     //    gemini.ts 기본이 thinking ON 이므로 여기선 명시해야 한다(2026-08-20).
-    const res = await geminiGenerate(prompt, { temperature: 0.4, maxOutputTokens: 2048, thinking: false });
+    // 2026-09-16: 메타데이터만 OpenAI(GPT-5.6 Luna) 실험 — env 게이트(ai/openai.ts)가 켜져
+    //    있으면 그쪽으로. 게이트 반쪽 설정(키 없음)은 Gemini 폴백이고 openai.ts 가 경고를 남긴다.
+    const luna = openaiMetadataModel();
+    const res = luna
+      ? await openaiGenerate(prompt, { model: luna, temperature: 0.4, maxOutputTokens: 2048 })
+      : await geminiGenerate(prompt, { temperature: 0.4, maxOutputTokens: 2048, thinking: false });
     const parsed = parseJsonLoose(res.text) as Record<string, unknown>;
     const asList = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter(Boolean) : []);
     const baseMeta = {

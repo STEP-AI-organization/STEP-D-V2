@@ -136,6 +136,7 @@
 | Soniox STT (realtime) | 1시간 | $0.12 | ₩170 | 미사용 |
 | OpenAI `gpt-image-2` | 1장 (medium·비정사각) | $0.041 | **₩58** | 16:9·9:16 은 정사각보다 쌈 |
 | OpenAI `gpt-image-2` | 1장 (high·비정사각) | $0.165 | ₩234 | |
+| OpenAI GPT-5.6 Luna | 1M 입/출력 | $0.20 / $1.20 | **₩283 / ₩1,699** | 번역·메타 실험 (2026-09-16 공시 · `OPENAI_TRANSLATE_MODEL`·`OPENAI_METADATA_MODEL`) — 롱컨텍스트(>200k?)는 $0.40/$1.80, 자막 배치엔 안 걸림 |
 | Batch/Flex 모드 | — | 표준가 **-50%** | | ⚠️ 현재 미사용 — §10 참조 |
 
 > ⚠️ **`.env.example` 의 `GEMINI_MODEL=gemini-3.1-flash` 는 공시 목록에 없는 이름이다.**
@@ -446,6 +447,7 @@ RATE = {  # (입력, 출력, 캐시입력) USD per 1M tokens — §3-1
     "gemini-2.5-flash":      (0.30, 2.50, 0.03),
     "gemini-2.5-flash-lite": (0.10, 0.40, 0.01),
     "gemini-2.5-pro":        (1.25, 10.0, 0.13),
+    "gpt-5.6-luna":          (0.20, 1.20, 0.02),   # 번역·메타 실험 (2026-09-16)
 }
 u = json.load(open(sys.argv[1])); total = 0
 for m, v in u["by_model"].items():

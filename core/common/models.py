@@ -47,6 +47,12 @@ COMMENT_SIGNAL: str = os.environ.get("GEMINI_COMMENT_SIGNAL_MODEL") or TEXT
 EVAL_TOPIC: str = os.environ.get("GEMINI_EVAL_TOPIC_MODEL") or TEXT
 PORTRAITS: str = os.environ.get("GEMINI_PORTRAITS_MODEL") or TEXT
 
+# ── OpenAI 텍스트 실험 (2026-09-16 · GPT-5.6 Luna) — 번역만 ──────────────────
+# Gemini 2.5 은퇴(flash-lite 2027-01-28 종료) 대비 실험. 비어 있으면 기존 Gemini(TRANSLATE)가
+# 그대로 돈다 — 오타·미설정 = Gemini(안전 방향). 켜도 OPENAI_API_KEY 가 없으면
+# translate_out 이 로그를 남기고 Gemini 로 폴백한다. 단가는 retry.py "gpt-5.6-luna".
+TRANSLATE_OPENAI: str = os.environ.get("OPENAI_TRANSLATE_MODEL") or ""
+
 # ────────────────────────────────────────────────────────────
 # Image 생성 모델 · thumbnail 파이프라인 · OpenAI (2026-07-30 전환).
 # 사용자 방향: Gemini image → OpenAI 최신 gpt-image-2.

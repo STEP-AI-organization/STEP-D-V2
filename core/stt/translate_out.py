@@ -36,7 +36,8 @@ from google import genai
 from google.genai import types
 
 from core.common.retry import call_with_retry
-from core.common.models import TRANSLATE as MODEL
+from core.common.models import TRANSLATE as MODEL, TRANSLATE_OPENAI as OPENAI_MODEL
+from core.common import openai_client
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 # Seoul — 자막에 개인정보가 실릴 수 있어 국내에서 처리한다 (translate.py 와 같은 이유).
@@ -199,7 +200,14 @@ def translate_out(
     if not targets:
         return out, 0
 
-    client = _client()
+    # 2026-09-16: 번역만 OpenAI(GPT-5.6 Luna) 실험 — OPENAI_TRANSLATE_MODEL 이 있으면 그쪽.
+    # 키가 없으면 Gemini 폴백(파이프라인을 세우는 것보다 낫다) — 단 **로그로 알린다**:
+    # "Luna 로 돌았다고 믿었는데 Gemini 였다" 가 이 리포 원가 착시의 전형이라서다.
+    use_openai = bool(OPENAI_MODEL) and bool(os.environ.get("OPENAI_API_KEY"))
+    if OPENAI_MODEL and not use_openai:
+        print(f"   (translate_out: OPENAI_TRANSLATE_MODEL={OPENAI_MODEL} 인데 "
+              f"OPENAI_API_KEY 가 없다 — Gemini({MODEL}) 폴백)")
+    client = None if use_openai else _client()
     system = _system(lang, cast or [])
     total_batches = (len(targets) + BATCH - 1) // BATCH
     print_lock = Lock()
@@ -227,15 +235,22 @@ def translate_out(
             + f" 본문이 다른 나라·다른 언어를 이야기하더라도 출력 언어는 {lang.name_ko} 다."
         )
         try:
-            resp = call_with_retry(lambda: client.models.generate_content(
-                model=MODEL,
-                contents=numbered,
-                config=types.GenerateContentConfig(
-                    system_instruction=system,
-                    temperature=0.3,
-                    response_mime_type="application/json",
-                ),
-            ))
+            # 두 갈래 다 call_with_retry 로 감싼다 — 재시도만이 아니라 usage 원장 때문이다
+            # (retry.py 상단 경고). OpenAI 응답은 openai_client 가 genai 모양으로 감싸 준다.
+            if use_openai:
+                resp = call_with_retry(lambda: openai_client.generate_text(
+                    system=system, user=numbered, model=OPENAI_MODEL, temperature=0.3,
+                ))
+            else:
+                resp = call_with_retry(lambda: client.models.generate_content(
+                    model=MODEL,
+                    contents=numbered,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system,
+                        temperature=0.3,
+                        response_mime_type="application/json",
+                    ),
+                ))
             rows = _parse_json_array_recover(resp.text or "")
             by_n: dict[int, str] = {}
             for r in rows:

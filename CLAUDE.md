@@ -235,6 +235,11 @@ GEMINI_TRANSLATE_MODEL   해외 배포 자막 번역 (core/stt/translate_out.py 
                       놓치기 쉽다(같은 60줄 4회 중 3회 영어). 배치 끝에 목표 언어를 다시
                       박는 수정이 translate_out.py 에 있고, **그게 실린 워커 이미지가 배포된
                       뒤에만** 이 값을 내릴 것 — 순서가 바뀌면 영어 자막이 id 라벨로 나간다
+OPENAI_TRANSLATE_MODEL / OPENAI_METADATA_MODEL
+                      번역(translate_out)·메타데이터 생성(generate-metadata)만 OpenAI 로
+                      돌리는 실험 게이트 (2026-09-16 · 예: gpt-5.6-luna · Gemini 2.5 은퇴 대비).
+                      OPENAI_API_KEY(썸네일과 공용) 없으면 로그 남기고 Gemini 폴백.
+                      원장 단가는 core/common/retry.py "gpt-5.6-luna" ($0.20/$1.20)
 WORKER_JOBS           content | youtube | gebd | naver,download | commerce | all(기본)  ← 레인 선택
 WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기본 50분)
 YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
